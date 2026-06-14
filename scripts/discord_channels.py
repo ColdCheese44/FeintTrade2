@@ -441,6 +441,31 @@ def broadcast_test(note: str = "") -> dict:
     return results
 
 
+def recent_messages(logical: str, limit: int = 5) -> list:
+    """Latest messages from a logical channel (for the dashboard Discord-feed inlay).
+    Returns [{author, bot, title, content, ts}] newest-first; empty on failure."""
+    cid = channel_id(logical)
+    if not (BOT_TOKEN and cid):
+        return []
+    try:
+        r = requests.get(f"{API_BASE}/channels/{cid}/messages?limit={min(max(limit, 1), 20)}",
+                         headers=_bot_headers(), timeout=8)
+        r.raise_for_status()
+        out = []
+        for m in r.json():
+            e = m.get("embeds") or []
+            out.append({
+                "author": (m.get("author") or {}).get("username", "?"),
+                "bot": bool((m.get("author") or {}).get("bot")),
+                "title": (e[0].get("title") if e else "") or "",
+                "content": (m.get("content") or "")[:200],
+                "ts": (m.get("timestamp") or "")[:19],
+            })
+        return out
+    except Exception:
+        return []
+
+
 def health_check() -> dict:
     """
     Full health snapshot for diagnostics / dashboard / !channels: config presence,

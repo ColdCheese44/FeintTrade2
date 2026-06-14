@@ -1466,12 +1466,16 @@ with sg_l:
         st.rerun()
 with sg_r:
     if research_mode_active():
+        try:
+            from dashboard_helpers import format_research_banner
+            _caps = format_research_banner(_load_wl().get("research_mode", {}))
+        except Exception:
+            _caps = "safeguards relaxed"
         st.markdown(
             "<div style='padding:7px 12px;border-radius:8px;background:rgba(245,158,11,0.12);"
             "border:1px solid rgba(245,158,11,0.4)'>"
             "<span style='color:#f59e0b;font-weight:800'>⚠ SAFEGUARDS RELAXED (data-collection)</span>"
-            "<span style='color:#94a3b8'> &nbsp;— lockout off · validation caps off · dedup relaxed · "
-            "positions 15 · crypto 60% · buy score ≥4. &nbsp;<b>Kept:</b> 5% cash, limit-only, stops, regime rules.</span>"
+            f"<span style='color:#94a3b8'> &nbsp;— {_caps}. &nbsp;<b>Kept:</b> 5% cash, limit-only, stops, regime rules.</span>"
             "</div>", unsafe_allow_html=True)
     elif _rm_enabled and not research_mode_active():
         st.markdown(
@@ -1721,6 +1725,20 @@ with tab_journal:
         st.info("No journal entries yet. The agent writes one each trading day.")
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _discord_feed(ch: str, n: int = 6):
+    return _dch.recent_messages(ch, n) if _dch else []
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _api_spend():
+    try:
+        import api_cost
+        return api_cost.spend_summary()
+    except Exception:
+        return None
+
+
 # ════════════════════ TAB: DISCORD ════════════════════
 
 with tab_discord:
@@ -1781,6 +1799,50 @@ with tab_discord:
                     "Detail": v.get("detail", "") or v.get("channel_id", ""),
                 } for k, v in results.items()]
                 st.dataframe(pd.DataFrame(rr), hide_index=True, use_container_width=True)
+
+        # ── 💸 Anthropic API spend (no balance API exists — this is spend-based) ──
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="mh-card-title">◈ ANTHROPIC API SPEND</div>', unsafe_allow_html=True)
+        _s = _api_spend()
+        if _s:
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Today", f"${_s['today']:.4f}")
+            a2.metric("This month", f"${_s['month']:.2f}")
+            a3.metric("Projected", f"${_s.get('projected_month', 0):.2f}")
+            a4.metric("All-time", f"${_s['all_time']:.2f}")
+            if _s.get("budget"):
+                st.progress(min(_s.get("budget_used_pct", 0) / 100, 1.0),
+                            text=f"Budget: ${_s['month']:.2f} / ${_s['budget']:.0f} "
+                                 f"({_s.get('budget_used_pct', 0):.0f}% used)"
+                                 + ("  ⚠️ fund soon" if _s.get('fund_soon') else ""))
+            else:
+                st.caption("No monthly budget set (api_config.monthly_budget_usd). Anthropic has no "
+                           "balance API — track spend here, fund at console.anthropic.com.")
+            if _s.get("by_routine"):
+                st.dataframe(pd.DataFrame([{"Routine": k, "Month $": v} for k, v in _s["by_routine"].items()]),
+                             hide_index=True, use_container_width=True)
+        else:
+            st.caption("API spend unavailable (no logs/api_usage.jsonl yet).")
+
+        # ── 💬 Discord feed — recent messages per channel, all in one program ──
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="mh-card-title">◈ DISCORD FEED</div>', unsafe_allow_html=True)
+        _chans = list(getattr(_dch, "_CHANNEL_ENV", {}).keys()) if _dch else []
+        if _chans:
+            _fc = st.selectbox("Channel", _chans, format_func=lambda n: f"#{n.replace('_', '-')}",
+                               key="discord_feed_channel")
+            _msgs = _discord_feed(_fc, 6)
+            if _msgs:
+                for _m in _msgs:
+                    _who = ("🤖 " if _m["bot"] else "👤 ") + _m["author"]
+                    _txt = (_m["title"] or _m["content"] or "(embed)")[:240]
+                    st.markdown(
+                        "<div style='background:#0d1117;border:1px solid #1e2733;border-radius:8px;"
+                        "padding:8px 12px;margin-bottom:6px'>"
+                        f"<span style='color:#8b949e;font-size:0.72rem'>{_who} · {_m['ts']}</span><br>"
+                        f"<span style='color:#f1f5f9'>{_txt}</span></div>", unsafe_allow_html=True)
+            else:
+                st.caption("No recent messages (or the bot can't read this channel).")
 
 
 # ─── SIDEBAR — CLAUDE CHAT ───────────────────────────────────────────────────

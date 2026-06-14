@@ -468,6 +468,8 @@ def cmd_help():
         "`!benchmark` — realized P&L vs buy-and-hold + no-trade\n"
         "`!ask <question>` — ask the AI a trading/strategy question (learn as you go)\n"
         "`!usage` — today's API cost breakdown\n"
+        "`!cost` — Anthropic API spend (month / projected / budget)\n"
+        "`!tests` — run the test suite + post ✅/❌ per test to #ft-dev-log\n"
         "`!help` — this message"
     )
 
@@ -611,6 +613,25 @@ def cmd_ask(*args):
         return f"❌ Couldn't answer right now ({e})."
 
 
+def cmd_cost():
+    """Anthropic API spend — today/month/projected + budget gauge."""
+    try:
+        import api_cost
+        return api_cost.format_brief()
+    except Exception as e:
+        return f"❌ Cost unavailable: {e}"
+
+
+def cmd_tests():
+    """Run the test suite and post a per-test ✅/❌ report to #ft-dev-log."""
+    try:
+        import test_report
+        rc = test_report.post_report(do_post=True)
+        return f"🧪 Test report posted to #ft-dev-log (exit code {rc})."
+    except Exception as e:
+        return f"❌ Test run failed: {e}"
+
+
 # No-arg commands
 COMMANDS = {
     "!status":     cmd_status,
@@ -628,6 +649,8 @@ COMMANDS = {
     "!digest":     cmd_digest,
     "!research":   cmd_research,
     "!benchmark":  cmd_benchmark,
+    "!cost":       cmd_cost,
+    "!tests":      cmd_tests,
     "!help":       cmd_help,
     # !heartbeat is handled directly in bot.py (async, long-running)
 }
