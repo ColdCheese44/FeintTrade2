@@ -459,3 +459,23 @@ def dev_log(message, level="debug"):
         msg_type="dev_log",
         dedup_key=f"dev:{level}:{str(message)[:80]}",
     )
+
+
+def watchlist_update(promoted, demoted, active):
+    """Auto-watchlist promotions/demotions → #ft-watchlist."""
+    promoted = list(promoted or [])
+    demoted = list(demoted or [])
+    parts = []
+    if promoted:
+        parts.append(f"🟢 **Promoted** ({len(promoted)}): " + ", ".join(promoted))
+    if demoted:
+        parts.append(f"🔻 **Demoted** ({len(demoted)}): " + ", ".join(demoted))
+    parts.append(f"📋 **Active auto-watchlist** ({len(active or [])}): "
+                 + (", ".join(active) if active else "— core watchlist only"))
+    send(
+        title="📋 Watchlist Updated",
+        description=("Names that keep showing up in marketwide discovery with quality get "
+                     "auto-added so research isn't limited to the static list.\n\n" + "\n".join(parts))[:2000],
+        color=GREEN if promoted else (ORANGE if demoted else BLUE),
+        msg_type="watchlist",
+    )

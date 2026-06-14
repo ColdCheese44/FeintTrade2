@@ -849,6 +849,13 @@ def _load_context() -> dict:
         ctx["discovery_brief"] = get_discovery_brief()
     except Exception:
         ctx["discovery_brief"] = ""
+    try:
+        import watchlist_manager
+        _wb = watchlist_manager.brief()
+        if _wb:
+            ctx["discovery_brief"] = (ctx.get("discovery_brief", "") + "\n\n" + _wb).strip()
+    except Exception:
+        pass
 
     # Market-research brief (hourly free-source synthesis) — macro/sector/crypto
     # context + concrete strategy adjustments. Injected into every decision prompt.
@@ -1424,6 +1431,14 @@ def gather_crypto_data() -> dict:
 
 def run_research():
     log.info("=== Morning Research started ===")
+
+    # Auto-updating watchlist: promote recurring marketwide-discovery winners, demote
+    # stale ones, and post changes to #ft-watchlist — the agent's universe grows itself.
+    try:
+        import watchlist_manager
+        watchlist_manager.run_and_post()
+    except Exception as e:
+        log.warning(f"Watchlist auto-update failed: {e}")
 
     ctx = _load_context()
     regime = ctx["regime"]

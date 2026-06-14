@@ -187,6 +187,16 @@
     "note": "Marketwide scanner (scripts/screener.py) surfaces trending tradable Alpaca symbols beyond the static watchlist."
   },
 
+  "dynamic_watchlist": {
+    "note": "Auto-updating watchlist (scripts/watchlist_manager.py). Recurring high-quality discovery candidates are auto-PROMOTED into a persisted dynamic list (data/dynamic_watchlist.json) and injected into the decision prompts; stale ones are demoted. Never rewrites this file. Promotions/demotions post to #ft-watchlist. Penny-caution names are never promoted.",
+    "enabled": true,
+    "promote_min_appearances": 3,
+    "promote_min_score": 4,
+    "demote_after_days": 4,
+    "max_active": 12,
+    "tracker_window_days": 14
+  },
+
   "watchlist": [
     {
       "symbol": "TQQQ",
