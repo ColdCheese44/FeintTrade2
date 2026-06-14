@@ -58,6 +58,7 @@ _CHANNEL_ENV = {
     "dev_log":      "DISCORD_CH_DEV_LOG",
     "dev_ideas":    "DISCORD_CH_DEV_IDEAS",
     "watchlist":    "DISCORD_CH_WATCHLIST",
+    "training":     "DISCORD_CH_TRAINING",
 }
 
 # Human-readable purpose per channel (test messages, dashboard panel, !channels).
@@ -73,6 +74,7 @@ _PURPOSE = {
     "dev_log":      "🛠️ Verbose diagnostics + routine crash traces",
     "dev_ideas":    "💡 Operator-only collaboration space (not bot-routed)",
     "watchlist":    "📋 Live watchlist + auto-update promotions (formerly #mindhub)",
+    "training":     "📚 Learn-as-you-go — plain-English lessons + graphic cards explaining each trade decision",
 }
 
 _STATE_FILE = ROOT / "data" / "discord_alert_state.json"
@@ -268,6 +270,21 @@ def _post_bot_file(cid: str, filename: str, content: str, payload: dict) -> bool
         return False
 
 
+def _post_bot_image(cid: str, filename: str, image_bytes: bytes, payload: dict) -> bool:
+    if not (BOT_TOKEN and cid):
+        return False
+    url = f"{API_BASE}/channels/{cid}/messages"
+    try:
+        files = {"files[0]": (filename, image_bytes, "image/png")}
+        r = requests.post(url, headers=_bot_headers(),
+                          data={"payload_json": json.dumps(payload)}, files=files, timeout=20)
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"Discord bot image post failed (channel {cid}): {e}")
+        return False
+
+
 def _post_webhook_json(payload: dict) -> bool:
     if not WEBHOOK_URL:
         return False
@@ -354,6 +371,32 @@ def post_file(msg_type: str, filename: str, content: str, embed: dict | None = N
         delivered = _post_webhook_file(filename, content, payload)
     if activity:
         activity.log("discord_file", f"{msg_type} file -> #{(logical or 'webhook').replace('_', '-')}",
+                     delivered=delivered, filename=filename)
+    return delivered
+
+
+def post_image(msg_type: str, filename: str, image_bytes: bytes, embed: dict | None = None,
+               dedup_key: str | None = None) -> bool:
+    """Route an image attachment (e.g. a teaching card) with embed + alert policy + the
+    channel->command_post fallback. Honors cooldown/dedup so cards don't spam."""
+    allowed, _reason = should_post(msg_type, dedup_key)
+    if not allowed:
+        _record(msg_type, dedup_key, severity_for(msg_type), posted=False)
+        return True
+    payload = {"embeds": [embed]} if embed else {}
+    delivered = False
+    logical = None
+    if multichannel_enabled():
+        logical, cid = _resolve_channel(msg_type)
+        if cid:
+            delivered = _post_bot_image(cid, filename, image_bytes, payload)
+        if not delivered and logical != "command_post":
+            cp = channel_id("command_post")
+            if cp:
+                delivered = _post_bot_image(cp, filename, image_bytes, payload)
+    _record(msg_type, dedup_key, severity_for(msg_type), posted=delivered)
+    if activity:
+        activity.log("discord_image", f"{msg_type} image -> #{(logical or 'webhook').replace('_', '-')}",
                      delivered=delivered, filename=filename)
     return delivered
 

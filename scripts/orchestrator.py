@@ -644,6 +644,13 @@ def _notify_proposal(routine: str, payload: dict, regime: dict | None = None):
         # Notify-only decision card to #ft-approvals (autonomous — FYI/override surface).
         if orders or closes:
             _notify("approval_card", routine, orders, regime_label)
+        # Teaching card → #ft-training-post: a plain-English lesson on the lead decision,
+        # regardless of outcome (throttled by the training channel cooldown).
+        try:
+            import teaching
+            teaching.teach_from_payload(payload, regime_label)
+        except Exception as te:
+            log.warning(f"Teaching post failed for {routine}: {te}")
     except Exception as e:
         log.warning(f"Proposal notification failed for {routine}: {e}")
 

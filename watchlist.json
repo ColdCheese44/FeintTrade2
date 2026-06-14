@@ -144,7 +144,8 @@
       "research": "research",
       "signals": "signals",
       "dev_log": "dev_log",
-      "watchlist": "watchlist"
+      "watchlist": "watchlist",
+      "training": "training"
     },
     "channel_fallback": {
       "approvals": "command_post",
@@ -155,7 +156,8 @@
       "status": "command_post",
       "research": "reports",
       "dev_log": "command_post",
-      "watchlist": "command_post"
+      "watchlist": "command_post",
+      "training": "command_post"
     },
     "disabled_channels": [],
     "severity_by_type": {
@@ -163,7 +165,8 @@
       "order_rejected": "warning",
       "stop_loss": "warning",
       "alert": "warning",
-      "status": "notice"
+      "status": "notice",
+      "training": "notice"
     },
     "cooldown_min": { "critical": 5, "warning": 15, "notice": 30, "info": 0 },
     "dedup_window_secs": 60,

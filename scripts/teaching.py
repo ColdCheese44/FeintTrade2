@@ -1,0 +1,260 @@
+"""
+Trading teaching engine → #ft-training-post.
+
+For every meaningful trade decision (proposal / research), post a beginner-friendly
+LESSON plus a generated graphic card explaining WHY the agent did what it did — and a
+generalizable takeaway — regardless of how the trade turns out. The goal is to help the
+operator learn trading by watching real decisions in plain language.
+
+Cards are drawn with Pillow (no matplotlib needed). Lessons are rule-based templates
+keyed off action / setup / regime / signals, so they are free, deterministic, and
+testable. discord_channels.post_image() ships the PNG + embed to #ft-training-post.
+"""
+
+import io
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# ── Lesson content (plain-English) ──────────────────────────────────────────────
+
+ACTION_TITLE = {
+    "BUY":   "Why we're BUYING {sym}",
+    "ADD":   "Why we're ADDING to {sym}",
+    "HOLD":  "Why we're HOLDING {sym}",
+    "TRIM":  "Why we're TRIMMING {sym}",
+    "CLOSE": "Why we're CLOSING {sym}",
+    "SELL":  "Why we're SELLING {sym}",
+    "SKIP":  "Why we're SKIPPING {sym}",
+    "NO_TRADE": "Why we're sitting in CASH",
+}
+
+SETUP_EXPLAIN = {
+    "squeeze": "A 'squeeze' is when price coils into very low volatility. When it RELEASES with volume it often runs — we only act on a bullish release, never the coil.",
+    "ema": "EMA cross + VWAP reclaim: the short-term trend turns up AND price trades above its volume-weighted average — buyers are in control.",
+    "vwap": "VWAP is the day's 'fair price'. Trading above it = buyers in control; reclaiming it after a dip is a classic continuation cue.",
+    "breakout": "A breakout clears a prior high on heavy volume. Volume is the lie-detector — no volume, no trust.",
+    "momentum": "Momentum: price + indicators agree in one direction. We trade WITH the tape, not against it.",
+    "reversion": "Oversold bounce: price fell too far, too fast with no bad news, and is snapping back toward fair value.",
+    "fib": "Fibonacci levels mark where pullbacks often pause. We look for a reversal candle there, not a blind catch.",
+    "obv": "OBV (On-Balance Volume) tracks whether volume confirms price. Price up + OBV up = real buying.",
+    "options": "A long call/put is a leveraged, defined-risk bet on direction — max loss is the premium, and theta (time decay) works against us, so we keep DTE short and exits tight.",
+}
+
+LESSON = {
+    "BUY":   "Risk first — we define the STOP before entry and only take setups paying ≥2× what we risk. Conviction sizes the bet.",
+    "ADD":   "Adding to a winner is fine; adding to a loser (averaging down) is how accounts blow up. We never do the latter.",
+    "HOLD":  "Letting winners run is the whole edge. We don't sell just because we're up — we trail the stop and let the trend work.",
+    "TRIM":  "Booking partial profit removes risk while leaving upside. You never go broke taking gains.",
+    "CLOSE": "Cutting losers fast (regime stop) is how small accounts survive. The first loss is the cheapest one.",
+    "SELL":  "Exits are decided by the plan — stop hit, target hit, or thesis broken — not by emotion.",
+    "SKIP":  "No trade is a position. Passing when a setup doesn't qualify beats forcing a low-quality trade.",
+    "NO_TRADE": "Patience pays. Over-trading is how small accounts die — we wait for multi-signal, confirmed setups.",
+}
+
+REGIME_NOTE = {
+    "BULL":  "BULL regime → full sizing, leveraged longs allowed.",
+    "NEUTRAL": "NEUTRAL regime → ~60% sizing, pick only the best setups.",
+    "BEAR":  "BEAR regime → small size, favor inverse ETFs/cash, no leveraged longs.",
+    "PANIC": "PANIC regime → capital preservation, minimal exposure.",
+}
+
+
+def _norm_action(action: str) -> str:
+    a = (action or "").upper()
+    return a if a in ACTION_TITLE else ("NO_TRADE" if a in ("", "HOLD_CASH", "WAIT", "PASS") else a)
+
+
+def _setup_key(setup_type: str) -> str:
+    s = (setup_type or "").lower()
+    for k in SETUP_EXPLAIN:
+        if k in s:
+            return k
+    return ""
+
+
+def lesson_for(d: dict) -> dict:
+    """Build a teaching lesson from a decision dict. Keys used (all optional):
+    symbol, action, setup_type, regime, conviction, signal_count, entry, stop, target, reasoning."""
+    sym = d.get("symbol", "the market")
+    action = _norm_action(d.get("action", "NO_TRADE"))
+    title = ACTION_TITLE.get(action, f"{action} {sym}").format(sym=sym)
+
+    bits = []
+    sk = _setup_key(d.get("setup_type", ""))
+    if sk:
+        bits.append(SETUP_EXPLAIN[sk])
+    sc = d.get("signal_count")
+    if sc:
+        bits.append(f"{sc} signals lined up before we acted — confluence beats any single indicator.")
+    rr = _rr(d)
+    if rr:
+        bits.append(f"Reward:risk ≈ {rr:.1f}:1 — we risk a little to make a lot.")
+    regime = (d.get("regime") or "").upper()
+    if regime in REGIME_NOTE:
+        bits.append(REGIME_NOTE[regime])
+    explain = " ".join(bits) or (d.get("reasoning") or "")[:240]
+
+    return {
+        "action": action,
+        "title": title,
+        "explain": explain.strip(),
+        "lesson": LESSON.get(action, LESSON["NO_TRADE"]),
+        "rr": rr,
+    }
+
+
+def _rr(d: dict):
+    try:
+        entry, stop, target = float(d["entry"]), float(d["stop"]), float(d["target"])
+        risk = abs(entry - stop)
+        return abs(target - entry) / risk if risk else None
+    except Exception:
+        return None
+
+
+# ── Graphic card (Pillow) ────────────────────────────────────────────────────────
+
+BG = (13, 17, 23); PANEL = (22, 27, 34); FG = (240, 246, 252); MUTE = (139, 148, 158)
+COLORS = {"BUY": (46, 204, 113), "ADD": (46, 204, 113), "HOLD": (52, 152, 219),
+          "TRIM": (230, 126, 34), "CLOSE": (231, 76, 60), "SELL": (231, 76, 60),
+          "SKIP": (120, 130, 140), "NO_TRADE": (120, 130, 140)}
+
+
+def _font(size, bold=False):
+    from PIL import ImageFont
+    for name in (["arialbd.ttf", "segoeuib.ttf"] if bold else ["arial.ttf", "segoeui.ttf"]) + ["DejaVuSans.ttf"]:
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _wrap(draw, text, font, max_w):
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if draw.textlength(t, font=font) <= max_w:
+            cur = t
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def make_card(lesson: dict) -> bytes:
+    """Render a dark teaching card to PNG bytes. No emoji in the image (PIL fonts
+    don't render them); emoji live in the Discord embed text instead."""
+    from PIL import Image, ImageDraw
+    W, H = 840, 500
+    img = Image.new("RGB", (W, H), BG)
+    dr = ImageDraw.Draw(img)
+    accent = COLORS.get(lesson["action"], MUTE)
+
+    dr.rectangle([0, 0, W, 8], fill=accent)
+    dr.text((32, 30), "FEINTTRADE  ·  TRADING LESSON", font=_font(16, True), fill=MUTE)
+    for i, line in enumerate(_wrap(dr, lesson["title"], _font(34, True), W - 64)[:2]):
+        dr.text((32, 58 + i * 40), line, font=_font(34, True), fill=FG)
+
+    # action badge
+    badge = lesson["action"].replace("_", " ")
+    bf = _font(20, True)
+    bw = dr.textlength(badge, font=bf) + 28
+    dr.rounded_rectangle([W - bw - 32, 34, W - 32, 70], radius=10, fill=accent)
+    dr.text((W - bw - 18, 40), badge, font=bf, fill=BG)
+
+    # "What's happening" panel
+    y = 150
+    dr.rounded_rectangle([32, y, W - 32, y + 150], radius=12, fill=PANEL)
+    dr.text((48, y + 14), "WHAT'S HAPPENING", font=_font(15, True), fill=accent)
+    ef = _font(20)
+    for i, line in enumerate(_wrap(dr, lesson["explain"] or "—", ef, W - 96)[:5]):
+        dr.text((48, y + 42 + i * 22), line, font=ef, fill=FG)
+
+    # R:R strip (if available)
+    y2 = y + 168
+    if lesson.get("rr"):
+        dr.text((48, y2), f"REWARD : RISK  ≈  {lesson['rr']:.1f} : 1", font=_font(18, True), fill=(46, 204, 113))
+        bx = 360
+        dr.rectangle([bx, y2 + 4, bx + min(int(lesson['rr'] * 60), 380), y2 + 18], fill=(46, 204, 113))
+        dr.rectangle([bx, y2 + 22, bx + 60, y2 + 36], fill=(231, 76, 60))
+
+    # Lesson bar
+    ly = H - 150
+    dr.rounded_rectangle([32, ly, W - 32, ly + 112], radius=12, fill=(30, 38, 48))
+    dr.text((48, ly + 12), "LESSON", font=_font(15, True), fill=(241, 196, 15))
+    lf = _font(20, True)
+    for i, line in enumerate(_wrap(dr, lesson["lesson"], lf, W - 96)[:3]):
+        dr.text((48, ly + 36 + i * 22), line, font=lf, fill=FG)
+
+    dr.text((32, H - 22), "Paper trading · educational only · not financial advice", font=_font(13), fill=MUTE)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ── Post to #ft-training-post ─────────────────────────────────────────────────────
+
+def teach(decision: dict, dedup_key: str | None = None) -> bool:
+    """Build a lesson + card from a decision dict and post to #ft-training-post."""
+    lesson = lesson_for(decision)
+    try:
+        png = make_card(lesson)
+    except Exception:
+        png = None
+    emoji = {"BUY": "🟢", "ADD": "🟢", "HOLD": "🔵", "TRIM": "🟠",
+             "CLOSE": "🔴", "SELL": "🔴", "SKIP": "⚪", "NO_TRADE": "⚪"}.get(lesson["action"], "📚")
+    desc = f"**{lesson['explain']}**\n\n📖 **Lesson:** {lesson['lesson']}" if lesson["explain"] else f"📖 **Lesson:** {lesson['lesson']}"
+    embed = {
+        "title": f"{emoji} 📚 {lesson['title']}",
+        "description": desc[:2000],
+        "color": (COLORS.get(lesson["action"], MUTE)[0] << 16) + (COLORS.get(lesson["action"], MUTE)[1] << 8) + COLORS.get(lesson["action"], MUTE)[2],
+    }
+    dk = dedup_key or f"teach:{lesson['action']}:{decision.get('symbol', '')}"
+    try:
+        import discord_channels as dch
+        if png:
+            embed["image"] = {"url": "attachment://lesson.png"}
+            return dch.post_image("training", "lesson.png", png, embed=embed, dedup_key=dk)
+        return dch.post("training", embed=embed, dedup_key=dk)
+    except Exception:
+        return False
+
+
+def teach_from_payload(payload: dict, regime: str = "") -> bool:
+    """Pick the most instructive decision from a proposal payload and teach it.
+    Teaches the lead order if any, else the stand-pat (cash) stance."""
+    payload = payload or {}
+    orders = [o for o in payload.get("orders", []) if isinstance(o, dict)]
+    closes = [c for c in payload.get("closes", []) if isinstance(c, dict)]
+    lead = None
+    if orders:
+        o = max(orders, key=lambda x: x.get("conviction", x.get("score", 0)) or 0)
+        lead = {"symbol": o.get("symbol"), "action": str(o.get("side", "buy")).upper().replace("BUY", "BUY"),
+                "setup_type": o.get("setup_type"), "conviction": o.get("conviction"),
+                "signal_count": (o.get("signals") or {}).get("signal_count"),
+                "entry": o.get("limit_price"), "stop": o.get("stop"), "target": o.get("target"),
+                "regime": regime, "reasoning": o.get("reasoning")}
+    elif closes:
+        c = closes[0]
+        lead = {"symbol": c.get("symbol"), "action": "CLOSE", "regime": regime,
+                "reasoning": c.get("reasoning")}
+    else:
+        lead = {"symbol": "the market", "action": "NO_TRADE", "regime": regime,
+                "reasoning": (payload.get("summary") or "")}
+    return teach(lead)
+
+
+if __name__ == "__main__":
+    # Demo: render a sample card to a file for visual inspection.
+    sample = {"symbol": "NVDA", "action": "BUY", "setup_type": "squeeze_breakout",
+              "regime": "BULL", "signal_count": 7, "entry": 205, "stop": 199, "target": 220}
+    out = ROOT / "logs" / "sample_lesson.png"
+    out.parent.mkdir(exist_ok=True)
+    out.write_bytes(make_card(lesson_for(sample)))
+    print("wrote", out)
