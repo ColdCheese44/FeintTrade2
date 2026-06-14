@@ -1,5 +1,5 @@
 """
-Hourly market-research engine — MindHub Trader.
+Hourly market-research engine — FeintTrade.
 
 Pulls a wide read of the market from FREE sources only (no paid APIs) and
 synthesizes it into a concise research brief + concrete strategy adjustments that

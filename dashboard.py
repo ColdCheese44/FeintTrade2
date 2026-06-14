@@ -1,4 +1,4 @@
-"""MindHub Trader — Streamlit dashboard."""
+"""FeintTrade — Streamlit dashboard."""
 
 import json
 import math
@@ -130,7 +130,7 @@ def _stonks_html():
 </style>"""
 
 st.set_page_config(
-    page_title="MindHub Trader",
+    page_title="FeintTrade",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -1021,7 +1021,7 @@ def render_header():
 <div style="display:flex;align-items:center;justify-content:space-between;
   background:#0d1117;border:1px solid #1e2733;border-radius:10px;padding:14px 22px;margin-bottom:12px">
   <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
-    <span style="color:#f1f5f9;font-size:1.5rem;font-weight:800;letter-spacing:-0.01em">⚡ MINDHUB</span>
+    <span style="color:#f1f5f9;font-size:1.5rem;font-weight:800;letter-spacing:-0.01em">⚡ FEINTTRADE</span>
     <span style="color:#00d4aa;font-size:1.5rem;font-weight:300;margin-left:4px">TRADER</span>
     <span style="color:#334155;font-size:0.7rem;margin-left:12px;font-family:'JetBrains Mono',monospace">PAPER</span>
     {vm_badge}{cost_badge}
@@ -1865,7 +1865,7 @@ def render_chat_panel(account, positions):
         position_lines = json.dumps(positions, indent=2) if positions else "No open positions."
         journal_snippet = ctx.get("todays_journal", "No journal entry yet today.")
 
-        system = f"""You are Claude, the trading advisor embedded in MindHub Trader. You operate under the
+        system = f"""You are Claude, the trading advisor embedded in FeintTrade. You operate under the
 EXACT SAME policy as the autonomous agent — never recommend anything the agent's hard rules forbid.
 
 === HARD RISK RULES (code-enforced; never advise breaking these) ===
@@ -1931,7 +1931,7 @@ st.markdown(_stonks_html(), unsafe_allow_html=True)
 
 st.markdown("""
 <div style="text-align:center;padding:24px 0 8px;color:#334155;font-size:0.68rem;letter-spacing:0.08em">
-  MINDHUB TRADER · PAPER TRADING ONLY · ALPACA PAPER API · NOT FINANCIAL ADVICE · STONKS ONLY GO UP 📈
+  FEINTTRADE · PAPER TRADING ONLY · ALPACA PAPER API · NOT FINANCIAL ADVICE · STONKS ONLY GO UP 📈
 </div>
 """, unsafe_allow_html=True)
 

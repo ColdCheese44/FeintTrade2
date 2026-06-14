@@ -1,5 +1,5 @@
 """
-Intraday exit-consolidation tests — MindHub Trader.
+Intraday exit-consolidation tests — FeintTrade.
 Run: python -m pytest tests/test_intraday_consolidation.py -v
 
 run_intraday() used to carry its OWN copy of the swing-exit loop, which drifted from the

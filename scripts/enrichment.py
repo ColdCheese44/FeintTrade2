@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
-EDGAR_HEADERS = {"User-Agent": "MindHub Trader brendan.t.dodd@gmail.com"}
+EDGAR_HEADERS = {"User-Agent": "FeintTrade brendan.t.dodd@gmail.com"}
 
 load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
@@ -320,7 +320,7 @@ def get_wsb_sentiment():
         try:
             r = requests.get(
                 "https://min-api.cryptocompare.com/data/social/coin/latest",
-                params={"coinId": coin, "extraParams": "MindHubTrader"},
+                params={"coinId": coin, "extraParams": "FeintTradeTrader"},
                 timeout=10,
             )
             r.raise_for_status()

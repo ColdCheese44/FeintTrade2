@@ -182,7 +182,7 @@ def cmd_status():
     pos_count   = len(positions) if isinstance(positions, list) else 0
 
     lines = [
-        f"**MindHub Trader Status** — {datetime.now().strftime('%H:%M MT')}",
+        f"**FeintTrade Status** — {datetime.now().strftime('%H:%M MT')}",
         f"{'🛑 **KILL SWITCH ACTIVE**' if killed else ('🟢 Market Open' if market_open else '🔴 Market Closed')}",
         "",
         f"💰 Portfolio: **${equity:,.2f}**",
@@ -446,7 +446,7 @@ def cmd_journal():
 
 def cmd_help():
     return (
-        "**MindHub Trader — Bot Commands**\n"
+        "**FeintTrade — Bot Commands**\n"
         "`!status` — portfolio equity, cash, day P&L, kill state\n"
         "`!positions` — open positions with live P&L + active strategy\n"
         "`!strategies` — the strategy running on each position + regime playbook\n"

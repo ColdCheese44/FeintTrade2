@@ -1,5 +1,5 @@
 """
-Crypto-cycle indicator wiring — MindHub Trader.
+Crypto-cycle indicator wiring — FeintTrade.
 Run: python -m pytest tests/test_crypto_indicator_keys.py -v
 
 gather_crypto_data() hand-picks a compact indicator payload for the crypto SCORED

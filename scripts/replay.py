@@ -1,8 +1,8 @@
 """
 Replay / benchmark performance report (ported from FeintTrade's replay reports).
 
-MindHub's learning.py already computes win rate, expectancy, and profit factor. This
-adds the comparison FeintTrade emphasized but MindHub lacked: realized P&L measured
+FeintTrade's learning.py already computes win rate, expectancy, and profit factor. This
+adds the comparison FeintTrade emphasized but FeintTrade lacked: realized P&L measured
 against benchmark baselines — **buy-and-hold (SPY)** and **no-trade (cash)** — over the
 actual trading window, plus **max drawdown** and **payoff ratio**. The summary posts to
 #ft-reports.

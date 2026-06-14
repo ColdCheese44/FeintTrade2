@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the MindHub Trader suite."""
+"""Shared pytest fixtures for the FeintTrade suite."""
 import sys
 from pathlib import Path
 

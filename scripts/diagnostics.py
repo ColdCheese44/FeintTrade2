@@ -1,5 +1,5 @@
 """
-Self-diagnostic & auto-heal — MindHub Trader.
+Self-diagnostic & auto-heal — FeintTrade.
 
 Runs a full health sweep, auto-fixes what is safe to fix, and posts a report to
 Discord. Designed to run on a schedule (e.g. before the open and midday) so the
@@ -269,7 +269,7 @@ def run(fix=True, post=True):
     _check_bot_pid(r, fix)
     _check_discord_bot_process(r)
 
-    lines = [f"# MindHub Diagnostics — {now_mt_str()}",
+    lines = [f"# FeintTrade Diagnostics — {now_mt_str()}",
              f"Status: {'✅ HEALTHY' if r.healthy() else '❌ ISSUES FOUND'}", ""]
     if r.fail:
         lines += ["## ❌ Errors"] + [f"- {m}" for m in r.fail] + [""]

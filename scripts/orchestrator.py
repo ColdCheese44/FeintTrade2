@@ -1,5 +1,5 @@
 """
-Autonomous trading orchestrator — MindHub Trader.
+Autonomous trading orchestrator — FeintTrade.
 Called by Windows Task Scheduler.
 
 Usage:

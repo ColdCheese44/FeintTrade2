@@ -1,5 +1,5 @@
 """
-BB-squeeze release-detection tests — MindHub Trader.
+BB-squeeze release-detection tests — FeintTrade.
 Run: python -m pytest tests/test_bb_squeeze.py -v
 
 detect_bb_squeeze() used to report SQUEEZE_RELEASED_<dir> for ANY bar that wasn't

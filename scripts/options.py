@@ -1,5 +1,5 @@
 """
-Options chain data + contract selection — MindHub Trader.
+Options chain data + contract selection — FeintTrade.
 
 Long calls/puts ONLY (no selling premium). The free Alpaca options feed (indicative)
 returns quotes but NOT greeks/IV, so contract selection uses MONEYNESS as a delta proxy

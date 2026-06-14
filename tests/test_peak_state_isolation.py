@@ -1,5 +1,5 @@
 """
-Trailing-peak state isolation tests — MindHub Trader.
+Trailing-peak state isolation tests — FeintTrade.
 Run: python -m pytest tests/test_peak_state_isolation.py -v
 
 _manage_swing_exits() persists each open position's running peak unrealized-pnl to ONE

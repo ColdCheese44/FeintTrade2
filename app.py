@@ -1,5 +1,5 @@
 """
-MindHub Trader — Desktop App
+FeintTrade — Desktop App
 Wraps the dashboard and Discord into a native windowed app with system tray.
 Close the window (X) or choose Quit from the tray to kill everything.
 """
@@ -101,9 +101,9 @@ def start_tray(main_window):
             pass
 
     _tray_icon = pystray.Icon(
-        "MindHub Trader",
+        "FeintTrade",
         make_icon(),
-        "MindHub Trader",
+        "FeintTrade",
         menu=pystray.Menu(
             pystray.MenuItem("Show Dashboard", on_show, default=True),
             pystray.MenuItem("Quit", on_quit),
@@ -209,7 +209,7 @@ iframe {
 </head>
 <body>
 <div class="titlebar">
-  <span class="logo">📈 MINDHUB TRADER</span>
+  <span class="logo">📈 FEINTTRADE</span>
   <div class="tabs">
     <button class="tab active" id="tab-dash" onclick="activateTab('dash')">Dashboard</button>
     <button class="tab" id="tab-discord" onclick="openDiscord()">Discord/Alpaca</button>
@@ -245,13 +245,13 @@ function openDiscord() {
 if __name__ == "__main__":
     import webview
 
-    print("Starting MindHub Trader...")
+    print("Starting FeintTrade...")
     start_services()
 
     api = AppAPI()
 
     main_win = webview.create_window(
-        "MindHub Trader",
+        "FeintTrade",
         html=SHELL,
         js_api=api,
         width=1440,

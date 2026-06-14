@@ -1,5 +1,5 @@
 """
-Risk engine tests — MindHub Trader post-session remediation pass.
+Risk engine tests — FeintTrade post-session remediation pass.
 Run: python -m pytest tests/test_risk.py -v
 
 Covers:

@@ -1,5 +1,5 @@
 """
-Detailed session report — MindHub Trader.
+Detailed session report — FeintTrade.
 
 Produces a deep, structured end-of-session report and posts it to Discord (concise
 embed + full report as a downloadable .md attachment) and to reports/ on disk. The
@@ -217,7 +217,7 @@ def build_text(session_type, data):
         "now":        "SESSION SNAPSHOT",
     }
     L = []
-    L.append(f"# MINDHUB TRADER — {title_map.get(session_type, 'SESSION REPORT')}")
+    L.append(f"# FEINTTRADE — {title_map.get(session_type, 'SESSION REPORT')}")
     L.append(f"_{now_mt().strftime('%A, %B %d %Y · %H:%M')} {mt_tz_label()} · phase={market_phase()}_")
     L.append("")
     L.append("## 1. Account & P&L")
@@ -422,7 +422,7 @@ def post(session_type="now"):
                f"Full detailed report attached ⬇️ (export to your analysis AI).")
     if dn:
         try:
-            dn.send_file(fname, text, title=f"{icon} MindHub {session_type.upper()} Report", description=summary)
+            dn.send_file(fname, text, title=f"{icon} FeintTrade {session_type.upper()} Report", description=summary)
         except Exception as e:
             print(f"Discord post failed: {e}")
     print(f"Report written → {out_path}")

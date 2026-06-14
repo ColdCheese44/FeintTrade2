@@ -423,7 +423,7 @@ def signals_card(title, body):
 def approval_card(routine, orders, regime_label=""):
     """
     Notify-only card of the actionable decisions the agent is auto-executing →
-    #ft-approvals. MindHub stays fully autonomous, so this is an at-a-glance
+    #ft-approvals. FeintTrade stays fully autonomous, so this is an at-a-glance
     operator feed / override surface, not an execution gate.
     """
     orders = [o for o in (orders or []) if isinstance(o, dict)]

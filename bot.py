@@ -1,5 +1,5 @@
 """
-MindHub Trader — Discord Bot
+FeintTrade — Discord Bot
 Listens in DISCORD_MINDHUB_CHANNEL_ID for !commands and shells out to discord_commands.py.
 Run: python bot.py
 """
@@ -17,7 +17,9 @@ ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env", override=True)
 
 TOKEN      = os.getenv("DISCORD_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("DISCORD_MINDHUB_CHANNEL_ID", "0"))
+# Bot listens in the primary command-post channel (ft-command-post); falls back to
+# the legacy channel id if command_post isn't configured.
+CHANNEL_ID = int(os.getenv("DISCORD_CH_COMMAND_POST") or os.getenv("DISCORD_MINDHUB_CHANNEL_ID", "0"))
 
 COMMANDS = {"!status", "!positions", "!strategies", "!orders", "!price", "!buy", "!sell",
             "!report", "!kill", "!resume", "!cancel", "!journal", "!heartbeat", "!help",
@@ -84,12 +86,12 @@ async def _run_cycle_async(channel: discord.TextChannel):
 
 @client.event
 async def on_ready():
-    print(f"MindHub Bot online as {client.user}")
+    print(f"FeintTrade Bot online as {client.user}")
     channel = client.get_channel(CHANNEL_ID)
     if channel:
         await channel.send(
             embed=discord.Embed(
-                title="🤖 MindHub Trader Bot Online",
+                title="🤖 FeintTrade Bot Online",
                 description="Ready to receive commands.\n\n"
                             "`!status` `!positions` `!strategies` `!price` `!orders` `!buy` `!sell` "
                             "`!report` `!kill` `!resume` `!cancel` `!journal` `!heartbeat`\n"

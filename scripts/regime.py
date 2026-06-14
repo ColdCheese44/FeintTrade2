@@ -1,5 +1,5 @@
 """
-Market Regime Detection — MindHub Trader.
+Market Regime Detection — FeintTrade.
 
 Determines current market state based on SPY trend (EMA9/21/50),
 VIX level, and fear/greed context. Outputs regime + position sizing

@@ -1,5 +1,5 @@
 """
-Concentration + regime hard-rule enforcement — MindHub Trader.
+Concentration + regime hard-rule enforcement — FeintTrade.
 Run: python -m pytest tests/test_concentration_and_regime.py -v
 
 Two documented HARD RULES were never actually enforced in code:

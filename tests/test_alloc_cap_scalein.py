@@ -1,5 +1,5 @@
 """
-Per-symbol allocation cap on scale-ins — MindHub Trader.
+Per-symbol allocation cap on scale-ins — FeintTrade.
 Run: python -m pytest tests/test_alloc_cap_scalein.py -v
 
 validate_order()'s per-symbol allocation cap used to measure only the NEW order's

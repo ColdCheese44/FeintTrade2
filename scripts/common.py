@@ -1,5 +1,5 @@
 """
-Shared utilities for MindHub Trader — the single source of truth for:
+Shared utilities for FeintTrade — the single source of truth for:
   • Symbol normalization (Alpaca returns BTCUSD; we standardize on BTC/USD)
   • Mountain Time with correct MDT/MST labeling (zoneinfo America/Denver)
   • Risk config loading from watchlist.json

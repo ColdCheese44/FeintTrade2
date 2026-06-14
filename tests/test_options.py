@@ -1,5 +1,5 @@
 """
-Options foundation tests — MindHub Trader.
+Options foundation tests — FeintTrade.
 Run: python -m pytest tests/test_options.py -v
 
 Covers the safety-critical options plumbing: OCC-symbol classification, premium-based

@@ -1,5 +1,5 @@
 """
-Trade Learning System — MindHub Trader.
+Trade Learning System — FeintTrade.
 
 Tracks every trade entry/exit with full signal context, computes performance
 statistics, and generates a performance brief for injection into Claude prompts.

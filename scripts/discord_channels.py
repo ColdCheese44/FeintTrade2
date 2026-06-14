@@ -1,7 +1,7 @@
 """
 Multi-channel Discord router (FeintTrade 10-channel operator layer, ported to Python).
 
-MindHub historically posted everything to a single Discord webhook. FeintTrade's
+FeintTrade historically posted everything to a single Discord webhook. FeintTrade's
 operator UX routes each message TYPE to a dedicated channel (command-post, signals,
 trade-log, alerts, status, reports, research, approvals, dev-log, dev-ideas) with
 severity-based cooldowns and dedup so the server stays scannable.
@@ -52,6 +52,7 @@ _CHANNEL_ENV = {
     "research":     "DISCORD_CH_RESEARCH",
     "dev_log":      "DISCORD_CH_DEV_LOG",
     "dev_ideas":    "DISCORD_CH_DEV_IDEAS",
+    "watchlist":    "DISCORD_CH_WATCHLIST",
 }
 
 # Human-readable purpose per channel (test messages, dashboard panel, !channels).
@@ -66,6 +67,7 @@ _PURPOSE = {
     "research":     "morning research brief + watchlist intel",
     "dev_log":      "routine crashes + verbose diagnostics",
     "dev_ideas":    "operator-only (not bot-routed)",
+    "watchlist":    "live watchlist + auto-update promotions (was #mindhub)",
 }
 
 _STATE_FILE = ROOT / "data" / "discord_alert_state.json"
@@ -367,7 +369,7 @@ def broadcast_test(note: str = "") -> dict:
             continue
         embed = {
             "title": f"🧪 Channel test — #{logical.replace('_', '-')}",
-            "description": (f"MindHub → Discord routing test. This channel receives: "
+            "description": (f"FeintTrade → Discord routing test. This channel receives: "
                             f"**{_PURPOSE.get(logical, '—')}**." + (f"\n\n{note}" if note else "")),
             "color": 0x3498db,
             "timestamp": ts,

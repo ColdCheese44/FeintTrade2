@@ -1,5 +1,5 @@
 # =====================================================================
-#  MindHub Trader — full Task Scheduler workflow (Mountain Time)
+#  FeintTrade — full Task Scheduler workflow (Mountain Time)
 #  RUN ONCE AS ADMINISTRATOR:  powershell -ExecutionPolicy Bypass -File register_all_tasks.ps1
 #
 #  Workflow (all times are the PC's local Mountain Time, MDT/MST auto):
@@ -85,7 +85,7 @@ function Register-MhTask {
 
 $weekdays = 'Monday','Tuesday','Wednesday','Thursday','Friday'
 
-Write-Host "Registering MindHub Trader tasks..."
+Write-Host "Registering FeintTrade tasks..."
 
 # 07:25 daily — diagnostic auto-heal before the session
 Register-MhTask "Trading - Diagnostic AM" "run_diagnostic.bat" `

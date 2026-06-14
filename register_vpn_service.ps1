@@ -1,5 +1,5 @@
 # =====================================================================
-#  MindHub Trader - headless VPN tunnel as a boot-level service
+#  FeintTrade - headless VPN tunnel as a boot-level service
 #  RUN ONCE AS ADMINISTRATOR:
 #     powershell -ExecutionPolicy Bypass -File register_vpn_service.ps1
 #

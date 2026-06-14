@@ -1,5 +1,5 @@
 """
-Entry-tracking integrity tests — MindHub Trader.
+Entry-tracking integrity tests — FeintTrade.
 Run: python -m pytest tests/test_entry_tracking.py -v
 
 Guards the learning log against recording a position that never actually filled.

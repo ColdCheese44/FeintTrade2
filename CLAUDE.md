@@ -1,4 +1,4 @@
-# MindHub Trader — Autonomous Trading Agent SOP
+# FeintTrade — Autonomous Trading Agent SOP
 
 **Mission (process goal):** Maximize risk-adjusted P&L while NEVER breaking a hard constraint —
 cash reserve > 5% and every allocation/concentration cap enforced. Compounding
@@ -552,7 +552,7 @@ FeintTrade). The agent does not address channels directly — it calls the typed
 `discord_notify` helpers and `scripts/discord_channels.py` routes each to the right
 channel via the bot API, with severity cooldowns + dedup and a
 target → command-post → webhook fallback. **Notify-only: channels mirror what the
-agent decides/does; they never gate execution (MindHub stays autonomous).**
+agent decides/does; they never gate execution (FeintTrade stays autonomous).**
 
 | Channel | Receives |
 |---------|----------|

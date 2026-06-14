@@ -1,4 +1,4 @@
-# MindHub Trader
+# FeintTrade
 
 Autonomous, multi-asset **paper** trading agent on the Alpaca API. Claude makes BUY/SELL/HOLD
 decisions every cycle across equities, leveraged/inverse ETFs, and 24/7 crypto. A Streamlit

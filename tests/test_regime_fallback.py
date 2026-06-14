@@ -1,5 +1,5 @@
 """
-Regime fallback tests — MindHub Trader.
+Regime fallback tests — FeintTrade.
 Run: python -m pytest tests/test_regime_fallback.py -v
 
 detect_regime() scores SPY's EMA/price trend as the backbone of the bull/bear model.

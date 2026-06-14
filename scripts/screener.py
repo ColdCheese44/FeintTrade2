@@ -1,5 +1,5 @@
 """
-Marketwide discovery scanner — MindHub Trader.
+Marketwide discovery scanner — FeintTrade.
 
 Surfaces trending, liquid, TRADABLE symbols beyond the static watchlist so the
 agent can hunt the whole market, not just 19 names. Sources:
