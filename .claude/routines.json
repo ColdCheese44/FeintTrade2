@@ -1,0 +1,54 @@
+{
+  "_comment": "Reference description of the autonomous workflow. The LIVE schedule is owned by Windows Task Scheduler — register it with register_all_tasks.ps1. All times are Mountain Time (MDT/MST). Each routine runs scripts/orchestrator.py <mode>.",
+  "timezone": "America/Denver",
+  "routines": [
+    {
+      "name": "Diagnostic (auto-heal)",
+      "time_mt": "07:25 and 11:30 daily",
+      "command": "run_diagnostic.bat  (python scripts/diagnostics.py run)",
+      "purpose": "Health sweep + safe auto-fixes (JSON repair, learning reconcile, stale pid). Posts a Discord report."
+    },
+    {
+      "name": "Morning Research",
+      "time_mt": "07:45 Mon-Fri",
+      "command": "python scripts/orchestrator.py research",
+      "purpose": "Pull market data + indicators + regime + discovery, write the day's journal (synthesis)."
+    },
+    {
+      "name": "Trading Session",
+      "time_mt": "08:00 Mon-Fri",
+      "command": "python scripts/orchestrator.py trading",
+      "purpose": "Read the research journal, enforce stops, make + place validated decisions."
+    },
+    {
+      "name": "Intraday Cycle",
+      "time_mt": "every 15 min, 07:30-14:00 Mon-Fri",
+      "command": "python scripts/orchestrator.py cycle",
+      "purpose": "Fresh live data: enforce stops, take/close positions, log to the journal."
+    },
+    {
+      "name": "End of Day",
+      "time_mt": "14:15 Mon-Fri",
+      "command": "python scripts/orchestrator.py eod",
+      "purpose": "Reflection journal, refresh performance stats, post the detailed EOD report."
+    },
+    {
+      "name": "After Hours",
+      "time_mt": "18:15 Mon-Fri",
+      "command": "python scripts/orchestrator.py afterhours",
+      "purpose": "Liquidate no-overnight names (UVXY), sync learning, post the detailed after-hours report."
+    },
+    {
+      "name": "Crypto Cycle",
+      "time_mt": "hourly, 24/7",
+      "command": "python scripts/orchestrator.py crypto",
+      "purpose": "Scored 1-10 crypto system; partial profits; regime-aware sizing."
+    },
+    {
+      "name": "Discord Bot",
+      "time_mt": "at logon (auto-restart)",
+      "command": "run_bot.bat",
+      "purpose": "Listens for !commands; !heartbeat runs a full live cycle."
+    }
+  ]
+}

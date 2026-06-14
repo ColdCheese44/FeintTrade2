@@ -1,0 +1,15 @@
+.env
+heartbeat.json
+journal/*.md
+!journal/TEMPLATE.md
+logs/
+data/
+reports/
+agent.log
+bot.pid
+kill.flag
+__pycache__/
+*.pyc
+.DS_Store
+*.conf
+*.ovpn

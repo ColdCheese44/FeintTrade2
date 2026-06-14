@@ -1,0 +1,23 @@
+"""Shared pytest fixtures for the MindHub Trader suite."""
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_no_live_orders(monkeypatch):
+    """Keep the suite hermetic. validate_order()'s crypto path otherwise calls
+    trade._pending_crypto_notional(), which hits the LIVE Alpaca /v2/orders endpoint —
+    making tests slow (retry/backoff on a flaky network), offline-fragile, and
+    non-deterministic (real pending crypto orders would skew the projected-exposure
+    assertions). Pin it to 0 so crypto-exposure tests depend only on the positions they
+    pass in. Harmless for tests that never touch trade.
+    """
+    try:
+        import trade
+        monkeypatch.setattr(trade, "_pending_crypto_notional", lambda: 0.0)
+    except Exception:
+        pass

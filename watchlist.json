@@ -1,0 +1,404 @@
+{
+  "strategy": "aggressive_daytrading_multi_asset",
+  "cash_reserve_pct": 5,
+  "max_daily_drawdown_pct": 6,
+  "max_open_positions": 8,
+  "options_enabled": true,
+  "options": {
+    "note": "WEEKDAY-PRIORITIZED long options (calls/puts only, no selling premium). Augments equities/ETFs; crypto stays 24/7. Premium can decay to $0, so exits are STRICT: +100% target / -50% stop / force-close at <=1 DTE. Caps are premium-at-risk (qty x price x 100).",
+    "weekday_focus": true,
+    "max_total_exposure_pct": 30,
+    "max_per_underlying_pct": 10,
+    "max_premium_per_trade": 5000,
+    "target_delta": 0.40,
+    "min_delta": 0.35,
+    "max_delta": 0.45,
+    "min_dte": 3,
+    "max_dte": 7,
+    "max_iv_rank": 50,
+    "profit_target_pct": 100,
+    "stop_loss_pct": -50,
+    "close_at_dte": 1,
+    "underlyings": ["NVDA", "TSLA", "AMD", "SPY", "QQQ"]
+  },
+  "notes": "Process goal: maximize risk-adjusted paper P&L while keeping drawdown < 6%, cash reserve > 5%, and all caps enforced. Aspirational target 10x/30d is secondary to never breaking a hard rule. Equity positions close 1:45 PM MT. Crypto 24/7. Regime filter applies.",
+
+  "risk": {
+    "cash_reserve_pct": 5,
+    "max_daily_drawdown_pct": 6,
+    "disable_daily_stops_in_paper": false,
+    "max_open_positions": 8,
+    "max_crypto_exposure_pct": 40,
+    "max_same_sector_positions": 4,
+    "default_unlisted_max_alloc_pct": 10,
+    "loss_streak_throttle": 3,
+    "loss_streak_lockout_threshold": 2,
+    "note": "Code-enforced hard constraints (scripts/trade.py validate_order). Cash, allocation, concentration, and position-count caps stay enforced. Daily soft/hard stops are advisory only while connected to Alpaca paper trading."
+  },
+
+  "validation_mode": {
+    "note": "Active automatically until completed_trades_threshold trades are logged. Overrides risk caps with tighter limits to protect small account during strategy validation.",
+    "completed_trades_threshold": 30,
+    "max_crypto_exposure_pct": 15,
+    "max_single_crypto_pct": 8,
+    "max_altcoin_exposure_pct": 3,
+    "max_daily_loss_soft_pct": 2,
+    "max_daily_loss_hard_pct": 3,
+    "max_new_crypto_per_session": 2,
+    "max_adds_per_symbol": 1
+  },
+
+  "research_mode": {
+    "note": "PAPER-ONLY mode. Relaxes the loss-streak lockout + validation caps so the agent can run its swing strategy freely, but it is QUALITY-GATED: high min_buy_score, concentrated book, and NO forced auto-buys (forcing trades was -EV). All safeguard code is retained — set enabled=false (or point APCA_BASE_URL at live) to restore every guardrail. Toggle from the dashboard. Cash-reserve, limit-only orders, and stops are NEVER relaxed.",
+    "enabled": true,
+    "disable_loss_streak_lockout": true,
+    "disable_validation_mode": true,
+    "disable_force_autobuy": true,
+    "relax_dedup": true,
+    "max_entries_per_symbol": 2,
+    "max_open_positions": 6,
+    "max_crypto_exposure_pct": 50,
+    "min_buy_score": 5
+  },
+
+  "trading_style": {
+    "note": "SWING / position trading — the agent holds multi-day while the thesis and trend are intact; there is NO forced intraday flatten. Quality over quantity: enter only momentum-CONFIRMED setups (released-bullish squeeze, MACD bullish, reclaiming VWAP, volume), let winners run with a trailing stop, and cut losers fast. This is the strategy that makes aggressive compounding ($100->$1,000) even possible; the old day-trade churn was -3%/trade.",
+    "mode": "swing",
+    "no_intraday_flatten": true,
+    "hold_winners_overnight": true,
+    "swing_stop_pct": -3.0,
+    "min_reward_risk": 2.0,
+    "partial_profit_pct": 10.0,
+    "trail_arm_pct": 5.0,
+    "trail_giveback_pct": 4.0,
+    "require_momentum_confirmation": true,
+    "profile": "aggressive — cut losers fast at -3% (unchanged); let winners run: trail still arms at +5% to protect gains, but partial is taken later (+10%) and the trail gives back 4% from peak (vs 3%) to ride bigger trends"
+  },
+
+  "live_account": {
+    "enabled": false,
+    "starting_capital": 100,
+    "target_capital": 1000,
+    "target_days": 30,
+    "min_order_usd": 1,
+    "note": "When enabled, paper orders are scaled to the real small account so behavior mirrors the live $100 -> $1,000 challenge. When disabled, paper sizes on full equity but prompts still factor the small-account reality."
+  },
+
+  "api_config": {
+    "note": "Model routing by routine. Opus for high-stakes decisions; Sonnet for intraday cycles; Haiku for rule-based scoring and news summarization. max_tokens caps only limit UNUSED output (you pay per generated token, not per cap) — they MUST stay high enough to fit the full structured-JSON decision for every watched/held symbol or the payload truncates mid-object and extraction fails (no orders, no alerts). Decision routines (trading/cycle/crypto) need room for many symbols + reasoning.",
+    "models": {
+      "research":   "claude-opus-4-8",
+      "trading":    "claude-opus-4-8",
+      "cycle":      "claude-sonnet-4-6",
+      "intraday":   "claude-sonnet-4-6",
+      "eod":        "claude-sonnet-4-6",
+      "afterhours": "claude-sonnet-4-6",
+      "crypto":     "claude-haiku-4-5-20251001",
+      "news_summary": "claude-haiku-4-5-20251001",
+      "json_repair": "claude-haiku-4-5-20251001",
+      "market_research": "claude-sonnet-4-6",
+      "chat": "claude-sonnet-4-6",
+      "marketopen": "claude-sonnet-4-6"
+    },
+    "max_tokens": {
+      "research":   4096,
+      "trading":    8192,
+      "cycle":      8192,
+      "intraday":   512,
+      "eod":        2048,
+      "afterhours": 1024,
+      "crypto":     6144,
+      "news_summary": 200,
+      "json_repair": 3000,
+      "market_research": 1300,
+      "marketopen": 1500
+    },
+    "use_news_prepass": true,
+    "news_prepass_max_articles": 3
+  },
+
+  "notifications": {
+    "note": "Discord alerting. proposal_alerts posts the agent's intended decision each cycle (independent of execution). decision_alerts posts the executed OUTCOME, but only when something actually filled (so it doesn't duplicate the proposal on idle cycles). Set proposal_alerts_when_idle=true to also post stand-pat (all hold/skip) cycles.",
+    "proposal_alerts": true,
+    "proposal_alerts_when_idle": true,
+    "decision_alerts": true
+  },
+
+  "discord": {
+    "note": "10-channel operator routing ported from FeintTrade. Channel IDs live in .env (DISCORD_CH_*); posting uses DISCORD_BOT_TOKEN via the bot API and falls back to command_post then the DISCORD_WEBHOOK_URL. Severity cooldowns + dedup prevent alert spam; trades/proposals are INFO (cooldown 0) so they always post. Set multichannel_enabled=false to revert to single-webhook behavior.",
+    "multichannel_enabled": true,
+    "routing": {
+      "heartbeat": "command_post",
+      "market_summary": "command_post",
+      "proposal": "signals",
+      "approval_card": "approvals",
+      "trade": "trade_log",
+      "decision": "trade_log",
+      "stop_loss": "alerts",
+      "take_profit": "trade_log",
+      "order_rejected": "alerts",
+      "kill": "alerts",
+      "alert": "alerts",
+      "status": "status",
+      "report": "reports",
+      "research": "research",
+      "signals": "signals",
+      "dev_log": "dev_log"
+    },
+    "channel_fallback": {
+      "approvals": "command_post",
+      "alerts": "command_post",
+      "reports": "command_post",
+      "signals": "command_post",
+      "trade_log": "command_post",
+      "status": "command_post",
+      "research": "reports",
+      "dev_log": "command_post"
+    },
+    "disabled_channels": [],
+    "severity_by_type": {
+      "kill": "critical",
+      "order_rejected": "warning",
+      "stop_loss": "warning",
+      "alert": "warning",
+      "status": "notice"
+    },
+    "cooldown_min": { "critical": 5, "warning": 15, "notice": 30, "info": 0 },
+    "dedup_window_secs": 60,
+    "quiet_hours": { "enabled": false, "start_hour": 22, "end_hour": 6, "applies_to": ["status", "report", "market_summary"] }
+  },
+
+  "discovery": {
+    "enabled": true,
+    "max_candidates": 24,
+    "min_dollar_volume": 20000000,
+    "min_price": 1.5,
+    "max_price": 2000,
+    "default_max_alloc_pct": 12,
+    "penny_risk": {
+      "note": "Manipulation/liquidity guards for low-priced discovered names (ported from FeintTrade). A cheap stock spiking hard on the day is pump-and-dump-prone; thin share volume at a low price is untrustworthy.",
+      "low_price_ceiling": 5.0,
+      "exclude_pump_gain_pct": 60.0,
+      "caution_gain_pct": 25.0,
+      "min_share_volume": 300000
+    },
+    "note": "Marketwide scanner (scripts/screener.py) surfaces trending tradable Alpaca symbols beyond the static watchlist."
+  },
+
+  "watchlist": [
+    {
+      "symbol": "TQQQ",
+      "type": "leveraged_etf",
+      "description": "3x Nasdaq-100 (ProShares) — primary bull momentum vehicle",
+      "max_allocation_pct": 40,
+      "regimes": ["BULL"],
+      "strategies": ["gap_and_go", "momentum_breakout", "ema_vwap_cross", "bb_squeeze_breakout"]
+    },
+    {
+      "symbol": "SOXL",
+      "type": "leveraged_etf",
+      "description": "3x PHLX Semiconductor (Direxion) — AI/chip momentum",
+      "max_allocation_pct": 30,
+      "regimes": ["BULL"],
+      "strategies": ["momentum_breakout", "ema_vwap_cross", "gap_and_go"]
+    },
+    {
+      "symbol": "FNGU",
+      "type": "leveraged_etf",
+      "description": "3x FANG+ (MicroSectors) — mega-cap tech concentrated exposure",
+      "max_allocation_pct": 25,
+      "regimes": ["BULL"],
+      "strategies": ["gap_and_go", "momentum_breakout"]
+    },
+    {
+      "symbol": "LABU",
+      "type": "leveraged_etf",
+      "description": "3x Biotech (Direxion) — ultra-volatile, catalyst-driven",
+      "max_allocation_pct": 15,
+      "regimes": ["BULL"],
+      "strategies": ["gap_and_go", "momentum_breakout"]
+    },
+    {
+      "symbol": "FAS",
+      "type": "leveraged_etf",
+      "description": "3x Financials (Direxion) — diversifies beyond tech; financials sector leadership vehicle",
+      "max_allocation_pct": 20,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["momentum_breakout", "ema_vwap_cross", "bb_squeeze_breakout"]
+    },
+    {
+      "symbol": "SOXS",
+      "type": "inverse_etf",
+      "description": "3x inverse Semiconductors (Direxion) — momentum LONG that profits when semis/tech fall; tradeable in ANY regime on its own confirmed bullish momentum (it rises as the market drops)",
+      "max_allocation_pct": 15,
+      "regimes": ["BULL", "NEUTRAL", "BEAR", "PANIC"],
+      "strategies": ["short_momentum", "inverse_etf_momentum", "momentum_breakout"]
+    },
+    {
+      "symbol": "SQQQ",
+      "type": "inverse_etf",
+      "description": "3x inverse Nasdaq-100 — momentum LONG that profits when the Nasdaq falls; tradeable in ANY regime on its own confirmed bullish momentum (distribution days, rotations)",
+      "max_allocation_pct": 25,
+      "regimes": ["BULL", "NEUTRAL", "BEAR", "PANIC"],
+      "strategies": ["short_momentum", "inverse_etf_momentum", "momentum_breakout"]
+    },
+    {
+      "symbol": "UVXY",
+      "type": "inverse_etf",
+      "description": "1.5x VIX futures — panic hedge only, hold minutes-hours max",
+      "max_allocation_pct": 10,
+      "regimes": ["PANIC"],
+      "strategies": ["panic_hedge"]
+    },
+    {
+      "symbol": "NVDA",
+      "type": "equity",
+      "description": "NVIDIA — AI chip leader, gap-and-go + breakout plays",
+      "max_allocation_pct": 30,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["gap_and_go", "momentum_breakout", "fibonacci_level", "vwap_bounce"]
+    },
+    {
+      "symbol": "AMD",
+      "type": "equity",
+      "description": "Advanced Micro Devices — secondary semi play, pairs with NVDA",
+      "max_allocation_pct": 25,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["ema_vwap_cross", "vwap_bounce", "fibonacci_level", "mean_reversion"]
+    },
+    {
+      "symbol": "TSLA",
+      "type": "equity",
+      "description": "Tesla — extreme vol, gap-and-go, news-driven momentum",
+      "max_allocation_pct": 25,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["gap_and_go", "momentum_breakout", "ema_vwap_cross"]
+    },
+    {
+      "symbol": "MSTR",
+      "type": "equity",
+      "description": "MicroStrategy — Bitcoin proxy, correlated to BTC moves",
+      "max_allocation_pct": 20,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["gap_and_go", "momentum_breakout"]
+    },
+    {
+      "symbol": "COIN",
+      "type": "equity",
+      "description": "Coinbase — crypto exchange proxy, moves with BTC/ETH",
+      "max_allocation_pct": 20,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["gap_and_go", "momentum_breakout", "vwap_bounce"]
+    },
+    {
+      "symbol": "PLTR",
+      "type": "equity",
+      "description": "Palantir — AI/defense, momentum + breakout tendencies",
+      "max_allocation_pct": 20,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["momentum_breakout", "ema_vwap_cross", "bb_squeeze_breakout"]
+    },
+    {
+      "symbol": "BTC/USD",
+      "type": "crypto",
+      "description": "Bitcoin — primary crypto, 24/7 scored system",
+      "max_allocation_pct": 35,
+      "regimes": ["BULL", "NEUTRAL", "BEAR"],
+      "strategies": ["crypto_scored"]
+    },
+    {
+      "symbol": "ETH/USD",
+      "type": "crypto",
+      "description": "Ethereum — smart contract leader, high liquidity",
+      "max_allocation_pct": 25,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["crypto_scored"]
+    },
+    {
+      "symbol": "SOL/USD",
+      "type": "crypto",
+      "description": "Solana — high-speed L1, high beta vs BTC",
+      "max_allocation_pct": 20,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["crypto_scored"]
+    },
+    {
+      "symbol": "DOGE/USD",
+      "type": "crypto",
+      "description": "Dogecoin — meme momentum, social-driven spikes",
+      "max_allocation_pct": 15,
+      "regimes": ["BULL"],
+      "strategies": ["crypto_scored"]
+    },
+    {
+      "symbol": "AVAX/USD",
+      "type": "crypto",
+      "description": "Avalanche — DeFi/L1, explosive alt momentum",
+      "max_allocation_pct": 15,
+      "regimes": ["BULL"],
+      "strategies": ["crypto_scored"]
+    },
+    {
+      "symbol": "LINK/USD",
+      "type": "crypto",
+      "description": "Chainlink — oracle/AI narrative, strong mid-cap momentum",
+      "max_allocation_pct": 15,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["crypto_scored"]
+    },
+    {
+      "symbol": "XRP/USD",
+      "type": "crypto",
+      "description": "XRP — high liquidity, news-sensitive regulatory plays",
+      "max_allocation_pct": 15,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["crypto_scored"]
+    }
+  ],
+
+  "options_watchlist": [
+    {
+      "underlying": "NVDA",
+      "enabled": true,
+      "max_allocation_pct": 10,
+      "strategy": "directional_momentum",
+      "target_delta": 0.40,
+      "max_dte": 7,
+      "note": "Long calls/puts only. Buy on high-conviction breakout; exit +100%/-50%/<=1 DTE."
+    },
+    {
+      "underlying": "TSLA",
+      "enabled": true,
+      "max_allocation_pct": 10,
+      "strategy": "directional_momentum",
+      "target_delta": 0.40,
+      "max_dte": 7
+    },
+    {
+      "underlying": "AMD",
+      "enabled": true,
+      "max_allocation_pct": 10,
+      "strategy": "directional_momentum",
+      "target_delta": 0.35,
+      "max_dte": 7
+    },
+    {
+      "underlying": "SPY",
+      "enabled": true,
+      "max_allocation_pct": 10,
+      "strategy": "directional_momentum",
+      "target_delta": 0.45,
+      "max_dte": 7,
+      "note": "Most liquid options in the market — tight spreads, broad-market directional."
+    },
+    {
+      "underlying": "QQQ",
+      "enabled": true,
+      "max_allocation_pct": 10,
+      "strategy": "directional_momentum",
+      "target_delta": 0.45,
+      "max_dte": 7,
+      "note": "Nasdaq-100 directional; very liquid."
+    }
+  ]
+}
