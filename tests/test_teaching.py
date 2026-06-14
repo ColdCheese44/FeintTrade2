@@ -33,6 +33,14 @@ def test_lesson_for_no_trade():
     assert "patience" in lesson["lesson"].lower() or "cash" in lesson["title"].lower()
 
 
+def test_no_trade_lesson_rotates_for_variety():
+    tips = {teaching._rotating_tip(seed=h) for h in range(10)}
+    assert len(tips) >= 5                               # rotation gives variety
+    lesson = teaching.lesson_for({"action": "NO_TRADE"})
+    assert lesson["tip"] in teaching.GENERAL_TIPS
+    assert lesson["lesson"] in teaching.GENERAL_TIPS    # no-trade uses a rotating tip
+
+
 def test_make_card_returns_png_bytes():
     png = teaching.make_card(teaching.lesson_for(
         {"symbol": "AMD", "action": "BUY", "entry": 100, "stop": 97, "target": 110}))

@@ -52,6 +52,27 @@ LESSON = {
     "NO_TRADE": "Patience pays. Over-trading is how small accounts die — we wait for multi-signal, confirmed setups.",
 }
 
+# Rotating general-wisdom tips so repetitive stances (no-trade / hold, posted hourly on
+# the crypto cycle) stay educational instead of showing the same line every time.
+GENERAL_TIPS = [
+    "Position size is your #1 risk control — never bet more than you can afford to lose on one idea.",
+    "The trend is your friend until it bends. Trade WITH momentum, not against it.",
+    "Cash is a position. Sitting out a choppy market is itself a decision.",
+    "Cut losers fast, let winners run — the opposite of what feels natural.",
+    "A 2:1 reward:risk lets you be wrong half the time and still come out ahead.",
+    "Volume confirms price. A breakout on light volume is usually a trap.",
+    "Regime matters more than any single setup — size down when volatility is high.",
+    "Judge your process, not the outcome — a good decision can still lose, and that's OK.",
+    "FOMO is expensive. There is always another trade.",
+    "Define your exit BEFORE you enter — entries are optional, exits are not.",
+]
+
+
+def _rotating_tip(seed=None) -> str:
+    import datetime as _dt
+    idx = (seed if seed is not None else _dt.datetime.now().hour) % len(GENERAL_TIPS)
+    return GENERAL_TIPS[idx]
+
 REGIME_NOTE = {
     "BULL":  "BULL regime → full sizing, leveraged longs allowed.",
     "NEUTRAL": "NEUTRAL regime → ~60% sizing, pick only the best setups.",
@@ -95,11 +116,16 @@ def lesson_for(d: dict) -> dict:
         bits.append(REGIME_NOTE[regime])
     explain = " ".join(bits) or (d.get("reasoning") or "")[:240]
 
+    tip = _rotating_tip()
+    # Repetitive stances (no-trade / hold) rotate through general tips so the training
+    # channel keeps teaching something new instead of the same line every cycle.
+    lesson_txt = tip if action in ("NO_TRADE", "HOLD") else LESSON.get(action, LESSON["NO_TRADE"])
     return {
         "action": action,
         "title": title,
         "explain": explain.strip(),
-        "lesson": LESSON.get(action, LESSON["NO_TRADE"]),
+        "lesson": lesson_txt,
+        "tip": tip,
         "rr": rr,
     }
 
@@ -209,7 +235,10 @@ def teach(decision: dict, dedup_key: str | None = None) -> bool:
         png = None
     emoji = {"BUY": "🟢", "ADD": "🟢", "HOLD": "🔵", "TRIM": "🟠",
              "CLOSE": "🔴", "SELL": "🔴", "SKIP": "⚪", "NO_TRADE": "⚪"}.get(lesson["action"], "📚")
-    desc = f"**{lesson['explain']}**\n\n📖 **Lesson:** {lesson['lesson']}" if lesson["explain"] else f"📖 **Lesson:** {lesson['lesson']}"
+    base = f"**{lesson['explain']}**\n\n" if lesson["explain"] else ""
+    desc = f"{base}📖 **Lesson:** {lesson['lesson']}"
+    if lesson.get("tip") and lesson["tip"] != lesson["lesson"]:
+        desc += f"\n\n💡 **Tip:** {lesson['tip']}"
     embed = {
         "title": f"{emoji} 📚 {lesson['title']}",
         "description": desc[:2000],
