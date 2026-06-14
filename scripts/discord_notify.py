@@ -223,15 +223,28 @@ def decision_proposal(routine, payload, regime_label="", title_prefix=""):
         fields.append({"name": "Leaning toward",
                        "value": ", ".join(watch_lines)[:1024], "inline": False})
 
-    n_act = len(orders) + len(closes)
-    color = BLUE if n_act else GREY
+    color = GREEN if orders else (RED if closes else GREY)
     head = f"{title_prefix}📋 Trade Proposal — {routine.upper()}"
     if regime_label:
         head += f" · {regime_label}"
+
+    # At-a-glance TL;DR stance so the post is scannable in a second (was a wall of text).
+    if orders:
+        syms = ", ".join(f"{str(o.get('side', 'buy')).upper()} {o.get('symbol', '?')}" for o in orders[:4])
+        tldr = f"🟢 **{len(orders)} new trade{'s' if len(orders) != 1 else ''}** — {syms}"
+    elif closes:
+        tldr = (f"🔴 **{len(closes)} exit{'s' if len(closes) != 1 else ''}** — "
+                + ", ".join(c.get('symbol', '?') for c in closes[:4]))
+    elif watch_lines:
+        tldr = f"🟡 **Watching {len(actionable)} setup{'s' if len(actionable) != 1 else ''}** — none confirmed, no entries"
+    else:
+        tldr = "⚪ **No new trades** — holding positions, waiting for a confirmed setup"
+
+    body = (summary or "No actionable trades proposed this cycle.").strip()
     send(
         msg_type="proposal",
         title=head[:240],
-        description=(summary or "No actionable trades proposed this cycle.")[:1500],
+        description=f"{tldr}\n\n{body}"[:1800],
         color=color,
         fields=_with_pnl(fields),
     )

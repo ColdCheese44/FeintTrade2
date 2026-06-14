@@ -23,7 +23,8 @@ CHANNEL_ID = int(os.getenv("DISCORD_CH_COMMAND_POST") or os.getenv("DISCORD_MIND
 
 COMMANDS = {"!status", "!positions", "!strategies", "!orders", "!price", "!buy", "!sell",
             "!report", "!kill", "!resume", "!cancel", "!journal", "!heartbeat", "!help",
-            "!channels", "!test", "!summary", "!digest", "!research", "!benchmark"}
+            "!channels", "!test", "!summary", "!digest", "!research", "!benchmark",
+            "!ask", "!explain", "!usage"}
 
 intents = discord.Intents.default()
 intents.message_content = True

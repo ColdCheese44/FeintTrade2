@@ -466,6 +466,8 @@ def cmd_help():
         "`!digest` — compact daily digest (P&L, positions, regime)\n"
         "`!research` — today's research brief\n"
         "`!benchmark` — realized P&L vs buy-and-hold + no-trade\n"
+        "`!ask <question>` — ask the AI a trading/strategy question (learn as you go)\n"
+        "`!usage` — today's API cost breakdown\n"
         "`!help` — this message"
     )
 
@@ -575,6 +577,40 @@ def cmd_benchmark():
         return f"❌ Benchmark failed: {e}"
 
 
+def cmd_ask(*args):
+    """
+    Free-form trading/strategy Q&A, answered by Claude with live FeintTrade context.
+    Lets the operator ask follow-up/clarification questions about trades, setups, or
+    strategy right in Discord — educational, paper-only framing (no new bot needed).
+    """
+    if not args:
+        return ("Usage: `!ask <question>` — e.g. `!ask why are we holding TQQQ?`, "
+                "`!ask what is a squeeze release?`, `!ask is now a good time to add crypto?`")
+    question = " ".join(args)[:500]
+    try:
+        import anthropic
+        account = run("research.py", "account")
+        positions = normalize_positions(run("research.py", "positions"))
+        reg = run("regime.py", "detect")
+        regime = reg.get("regime", "?") if isinstance(reg, dict) else "?"
+        pos = "; ".join(f"{p.get('symbol')} {float(p.get('unrealized_plpc', 0)) * 100:+.1f}%"
+                        for p in positions) if isinstance(positions, list) and positions else "none"
+        equity = float(account.get("equity", 0)) if isinstance(account, dict) else 0
+        system = (
+            "You are FeintTrade's trading tutor inside a Discord bot. Answer the operator's "
+            "question clearly and concisely for someone LEARNING to trade — practical and "
+            "educational, no fluff, under ~180 words. This is a PAPER account; frame answers as "
+            "education, not personalized financial advice.\n"
+            f"Live context: regime {regime}, equity ${equity:,.0f}, open positions: {pos}."
+        )
+        client = anthropic.Anthropic(max_retries=2, timeout=30)
+        resp = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=500,
+                                      system=system, messages=[{"role": "user", "content": question}])
+        return f"**❓ {question}**\n\n{resp.content[0].text.strip()}"[:1900]
+    except Exception as e:
+        return f"❌ Couldn't answer right now ({e})."
+
+
 # No-arg commands
 COMMANDS = {
     "!status":     cmd_status,
@@ -598,10 +634,12 @@ COMMANDS = {
 
 # Commands that take arguments
 ARG_COMMANDS = {
-    "!price":  cmd_price,
-    "!buy":    cmd_buy,
-    "!sell":   cmd_sell,
-    "!report": cmd_report,
+    "!price":   cmd_price,
+    "!buy":     cmd_buy,
+    "!sell":    cmd_sell,
+    "!report":  cmd_report,
+    "!ask":     cmd_ask,
+    "!explain": cmd_ask,
 }
 
 
