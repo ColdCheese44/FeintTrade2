@@ -2932,6 +2932,12 @@ Be direct and actionable. Every number must appear. Flag anything requiring imme
 if __name__ == "__main__":
     routine = sys.argv[1] if len(sys.argv) > 1 else None
     try:
+        import activity as _activity
+    except Exception:
+        _activity = None
+    if _activity and routine:
+        _activity.log("routine_start", routine)
+    try:
         if routine == "research":
             run_research()
         elif routine == "trading":
@@ -2956,8 +2962,12 @@ if __name__ == "__main__":
         else:
             print("Usage: python scripts/orchestrator.py [research|trading|intraday|cycle|eod|afterhours|marketopen|crypto|report|usage]")
             sys.exit(1)
+        if _activity and routine:
+            _activity.log("routine_done", routine)
     except Exception as e:
         log.exception(f"Routine '{routine}' failed: {e}")
         _notify("dev_log", f"Routine '{routine}' failed: {e}", "error")
+        if _activity and routine:
+            _activity.log("routine_error", f"{routine}: {e}", error=str(e)[:200])
         print(f"FATAL ERROR in '{routine}': {e}")
         sys.exit(1)

@@ -52,6 +52,7 @@ def router(monkeypatch, tmp_path):
            "dev_log": "900", "dev_ideas": "1000"}
     posts = []
     monkeypatch.setattr(dch, "_cfg", lambda: cfg)
+    monkeypatch.setattr(dch, "activity", None)   # keep tests from writing the activity log
     monkeypatch.setattr(dch, "BOT_TOKEN", "test-token")
     monkeypatch.setattr(dch, "WEBHOOK_URL", "https://example/webhook")
     monkeypatch.setattr(dch, "_STATE_FILE", tmp_path / "state.json")

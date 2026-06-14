@@ -36,6 +36,11 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env", override=True)
 
+try:
+    import activity
+except Exception:  # pragma: no cover - logging must never break notifications
+    activity = None
+
 BOT_TOKEN   = os.getenv("DISCORD_BOT_TOKEN", "").strip()
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 API_BASE    = "https://discord.com/api/v10"
@@ -57,17 +62,17 @@ _CHANNEL_ENV = {
 
 # Human-readable purpose per channel (test messages, dashboard panel, !channels).
 _PURPOSE = {
-    "command_post": "heartbeats + market/regime summary (primary)",
-    "approvals":    "decision cards (notify-only)",
-    "alerts":       "stop-losses, order rejects, kill-switch",
-    "reports":      "full EOD / after-hours reports",
-    "signals":      "trade proposals + marketwide discovery",
-    "trade_log":    "placed orders + executed decisions",
-    "status":       "end-of-day session summary",
-    "research":     "morning research brief + watchlist intel",
-    "dev_log":      "routine crashes + verbose diagnostics",
-    "dev_ideas":    "operator-only (not bot-routed)",
-    "watchlist":    "live watchlist + auto-update promotions (was #mindhub)",
+    "command_post": "🧭 Primary hub — heartbeats, market/regime summaries, and where you type commands",
+    "approvals":    "🗳️ Decision cards — what the agent is about to auto-execute (notify-only FYI/override)",
+    "alerts":       "🚨 Risk events — stop-losses, order rejects, kill-switch (cooldown-throttled)",
+    "reports":      "📄 Full EOD / after-hours reports (embed + downloadable .md)",
+    "signals":      "📡 Trade proposals + marketwide-discovery scan output",
+    "trade_log":    "🧾 Audit trail — every placed order and executed decision",
+    "status":       "📊 Automated daily session summary (equity · P&L · positions)",
+    "research":     "🔬 Morning research brief + watchlist intel",
+    "dev_log":      "🛠️ Verbose diagnostics + routine crash traces",
+    "dev_ideas":    "💡 Operator-only collaboration space (not bot-routed)",
+    "watchlist":    "📋 Live watchlist + auto-update promotions (formerly #mindhub)",
 }
 
 _STATE_FILE = ROOT / "data" / "discord_alert_state.json"
@@ -312,6 +317,7 @@ def post(msg_type: str, embed: dict | None = None, content: str | None = None,
         return True  # deliberately suppressed — not an error
 
     delivered = False
+    logical = None
     if multichannel_enabled():
         logical, cid = _resolve_channel(msg_type)
         if cid:
@@ -324,6 +330,10 @@ def post(msg_type: str, embed: dict | None = None, content: str | None = None,
         delivered = _post_webhook_json(payload)
 
     _record(msg_type, dedup_key, severity_for(msg_type), posted=delivered)
+    if activity:
+        activity.log("discord_post", f"{msg_type} -> #{(logical or 'webhook').replace('_', '-')}",
+                     delivered=delivered,
+                     title=((embed or {}).get("title") if embed else (content or "")[:80]))
     return delivered
 
 
@@ -331,6 +341,7 @@ def post_file(msg_type: str, filename: str, content: str, embed: dict | None = N
     """Route a file attachment (e.g. a full report) with the same fallback chain."""
     payload = {"embeds": [embed]} if embed else {}
     delivered = False
+    logical = None
     if multichannel_enabled():
         logical, cid = _resolve_channel(msg_type)
         if cid:
@@ -341,6 +352,9 @@ def post_file(msg_type: str, filename: str, content: str, embed: dict | None = N
                 delivered = _post_bot_file(cp, filename, content, payload)
     if not delivered:
         delivered = _post_webhook_file(filename, content, payload)
+    if activity:
+        activity.log("discord_file", f"{msg_type} file -> #{(logical or 'webhook').replace('_', '-')}",
+                     delivered=delivered, filename=filename)
     return delivered
 
 
@@ -368,14 +382,19 @@ def broadcast_test(note: str = "") -> dict:
             results[logical] = {"configured": False, "ok": False, "detail": "no channel id"}
             continue
         embed = {
-            "title": f"🧪 Channel test — #{logical.replace('_', '-')}",
-            "description": (f"FeintTrade → Discord routing test. This channel receives: "
-                            f"**{_PURPOSE.get(logical, '—')}**." + (f"\n\n{note}" if note else "")),
+            "title": f"📌 #{logical.replace('_', '-')}",
+            "description": (f"{_PURPOSE.get(logical, '—')}\n\n"
+                            f"✅ *Channel wired & reachable — FeintTrade is posting here.*"
+                            + (f"\n\n{note}" if note else "")),
             "color": 0x3498db,
             "timestamp": ts,
         }
         ok = _post_bot_json(cid, {"embeds": [embed]})
         results[logical] = {"configured": True, "ok": ok, "channel_id": cid}
+    if activity:
+        ok_n = sum(1 for r in results.values() if r.get("ok"))
+        activity.log("broadcast_test", f"posted purpose cards to {ok_n}/{len(results)} channels",
+                     note=note or None)
     return results
 
 
