@@ -86,8 +86,15 @@ async def _run_cycle_async(channel: discord.TextChannel):
 
 @client.event
 async def on_ready():
-    print(f"FeintTrade Bot online as {client.user}")
+    print(f"FeintTrade Bot online as {client.user} — command channel {CHANNEL_ID}")
     channel = client.get_channel(CHANNEL_ID)
+    if channel is None:
+        # The channel cache can be empty on the very first connect; fetch via REST so
+        # the online banner reliably lands in ft-command-post (not silently skipped).
+        try:
+            channel = await client.fetch_channel(CHANNEL_ID)
+        except Exception as e:
+            print(f"Could not resolve command channel {CHANNEL_ID}: {e}")
     if channel:
         await channel.send(
             embed=discord.Embed(
@@ -158,4 +165,19 @@ if __name__ == "__main__":
     if not TOKEN:
         print("ERROR: DISCORD_BOT_TOKEN not set in .env")
         sys.exit(1)
+    # Single-instance lock: bind a fixed localhost port so a stale bot left over from a
+    # migration/restart can't run concurrently on the same token (two bots fight over the
+    # gateway and one ends up on the wrong channel). run_bot.bat kills the prior PID first.
+    import socket
+    _lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _lock.bind(("127.0.0.1", 49517))
+        _lock.listen(1)
+    except OSError:
+        print("Another FeintTrade bot instance is already running — exiting.")
+        sys.exit(0)
+    try:
+        (ROOT / "bot.pid").write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:
+        pass
     client.run(TOKEN)

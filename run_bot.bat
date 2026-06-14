@@ -2,7 +2,9 @@
 cd /d "C:\Users\brend\FeintTrade2"
 if not exist logs mkdir logs
 
-:: Kill any stale bot.py processes before starting
+:: Kill the previous bot instance by its recorded PID (reliable even headless / session 0,
+:: where CommandLine-based matching is blank). Falls back to the old wmic match.
+if exist bot.pid (for /f %%p in (bot.pid) do taskkill /F /PID %%p >nul 2>&1)
 wmic process where "name='python.exe' and CommandLine like '%%bot.py%%'" call terminate >nul 2>&1
 :: Delay via ping, not timeout: `timeout` needs a console and fails headless (session 0),
 :: which would make the restart loop spin with no delay at boot before the network is up.
