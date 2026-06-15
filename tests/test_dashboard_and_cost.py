@@ -64,6 +64,36 @@ def test_freshness_label():
     assert dh.freshness_label(None)[0].startswith("🔴")
 
 
+def test_risk_budget_ok_and_breach():
+    caps = {"cash_reserve_pct": 5, "max_open_positions": 8, "max_crypto_exposure_pct": 40,
+            "max_same_sector_positions": 4}
+    rb = dh.risk_budget(caps, {"equity": 100000, "cash": 60000},
+                        [{"symbol": "NVDA", "market_value": 20000},
+                         {"symbol": "BTC/USD", "market_value": 10000, "asset_class": "crypto"}])
+    assert rb["cash_reserve"]["required"] == 5000 and rb["cash_reserve"]["ok"] is True
+    assert rb["positions"]["used"] == 2 and rb["positions"]["ok"] is True
+    assert rb["crypto"]["used_pct"] == 10.0 and rb["crypto"]["ok"] is True
+
+    breach = dh.risk_budget({"cash_reserve_pct": 5, "max_open_positions": 2, "max_crypto_exposure_pct": 40},
+                            {"equity": 1000, "cash": 10},
+                            [{"symbol": "A"}, {"symbol": "B"}, {"symbol": "C"}])
+    assert breach["cash_reserve"]["ok"] is False and breach["positions"]["ok"] is False
+
+
+def test_position_console_enriches():
+    rows = dh.position_console(
+        [{"symbol": "FAS", "qty": 84, "avg_entry_price": 141.87, "current_price": 145,
+          "unrealized_plpc": 0.022, "unrealized_pl": 260}],
+        {"FAS": {"trade_id": "FAS_20260612_080106", "setup_type": "bb_squeeze_breakout",
+                 "conviction": 7, "signals": {"signal_count": 6}, "market_regime": "BULL"}},
+        {"FAS": {"peak": 3.11, "partialed": False}}, stop_pct=3.0)
+    r = rows[0]
+    assert r["setup"] == "bb_squeeze_breakout" and r["conviction"] == 7 and r["signals"] == 6
+    assert r["regime_at_entry"] == "BULL" and r["peak_pct"] == 3.11
+    assert r["stop_pct"] == -3.0 and abs(r["stop_price"] - 141.87 * 0.97) < 0.01
+    assert r["age"] is not None
+
+
 # ── test_report parsing ───────────────────────────────────────────────────────────
 
 def test_test_report_parse_and_embed():

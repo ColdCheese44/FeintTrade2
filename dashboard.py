@@ -1495,8 +1495,8 @@ with sg_r:
 st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
 # ── Tabs ──
-tab_overview, tab_charts, tab_screener, tab_heatmaps, tab_portfolio, tab_journal, tab_discord = st.tabs([
-    "  OVERVIEW  ", "  CHARTS  ", "  SCREENER  ", "  HEATMAPS  ", "  PORTFOLIO  ", "  JOURNAL  ", "  DISCORD  "
+tab_overview, tab_charts, tab_screener, tab_heatmaps, tab_portfolio, tab_journal, tab_ops, tab_discord = st.tabs([
+    "  OVERVIEW  ", "  CHARTS  ", "  SCREENER  ", "  HEATMAPS  ", "  PORTFOLIO  ", "  JOURNAL  ", "  OPS  ", "  DISCORD  "
 ])
 
 # ════════════════════ TAB: OVERVIEW ════════════════════
@@ -1723,6 +1723,97 @@ with tab_journal:
                 st.markdown(content)
     else:
         st.info("No journal entries yet. The agent writes one each trading day.")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _intel_audit_data():
+    try:
+        import intel_audit
+        return intel_audit.audit()
+    except Exception:
+        return None
+
+
+def _read_state_json(rel):
+    try:
+        return json.loads((ROOT / rel).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+# ════════════════════ TAB: OPS (operator console) ════════════════════
+
+with tab_ops:
+    try:
+        from dashboard_helpers import risk_budget, position_console
+        from common import get_effective_caps
+        _caps = get_effective_caps()
+        _acct = get_account()
+        _poss = get_positions()
+    except Exception as _e:
+        _caps, _acct, _poss = {}, {}, []
+        st.error(f"Ops data unavailable: {_e}")
+
+    # ── Risk budget ──
+    st.markdown('<div class="mh-card-title">◈ RISK BUDGET</div>', unsafe_allow_html=True)
+    try:
+        rb = risk_budget(_caps, _acct, _poss)
+        b1, b2, b3, b4 = st.columns(4)
+        cr = rb["cash_reserve"]
+        b1.metric(("🟢 " if cr["ok"] else "🔴 ") + "Cash reserve",
+                  f"${cr['available']:,.0f}", f"need ${cr['required']:,.0f} ({cr['pct_req']}%)")
+        pz = rb["positions"]
+        b2.metric(("🟢 " if pz["ok"] else "🔴 ") + "Positions", f"{pz['used']} / {pz['allowed']}")
+        cy = rb["crypto"]
+        b3.metric(("🟢 " if cy["ok"] else "🔴 ") + "Crypto exposure", f"{cy['used_pct']:.0f}% / {cy['cap_pct']}%")
+        b4.metric("Max same-sector", rb["sector_cap"])
+    except Exception as _e:
+        st.caption(f"Risk budget unavailable: {_e}")
+
+    # ── Position console ──
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="mh-card-title">◈ POSITION CONSOLE (why we hold each)</div>', unsafe_allow_html=True)
+    try:
+        _rows = position_console(_poss, _read_state_json("data/open_trades.json"),
+                                 _read_state_json("data/position_peaks.json"))
+        if _rows:
+            st.dataframe(pd.DataFrame([{
+                "Symbol": r["symbol"], "Qty": r["qty"], "Entry": r["entry"], "Now": r["current"],
+                "P&L %": r["pnl_pct"], "P&L $": r["pnl_usd"], "Setup": r["setup"],
+                "Conv": r["conviction"], "Sig": r["signals"], "Regime@entry": r["regime_at_entry"],
+                "Peak %": r["peak_pct"], "Partial": "✓" if r["partialed"] else "",
+                "Stop": r["stop_price"], "Age": r["age"],
+            } for r in _rows]), hide_index=True, use_container_width=True)
+        else:
+            st.caption("No open positions — sitting in cash.")
+    except Exception as _e:
+        st.caption(f"Position console unavailable: {_e}")
+
+    # ── Decision-intelligence audit ──
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="mh-card-title">◈ DECISION-INTELLIGENCE — what the agent gets right/wrong</div>',
+                unsafe_allow_html=True)
+    _ia = _intel_audit_data()
+    if _ia and _ia.get("by_action"):
+        ia1, ia2 = st.columns(2)
+        with ia1:
+            st.caption("Forward return by action (worst → best)")
+            st.dataframe(pd.DataFrame([{"Action": a, "Avg %": st_.get("avg_primary_return_pct"),
+                                        "n": st_.get("count")} for a, st_ in _ia["by_action"]]),
+                         hide_index=True, use_container_width=True)
+        with ia2:
+            st.caption("Blocker predictiveness (🔴 blocks winners · 🟢 blocks losers)")
+            bp = _ia.get("blocker_predictiveness") or []
+            if bp:
+                st.dataframe(pd.DataFrame([{"Blocker": r["blocker"], "Avg fwd %": r["avg_return_pct"],
+                                            "n": r["count"], "Verdict": r["verdict"]} for r in bp[:12]]),
+                             hide_index=True, use_container_width=True)
+            else:
+                st.caption("Not enough evaluated decisions yet.")
+        for _ln in (_ia.get("brief_lines") or [])[1:5]:
+            st.caption(f"• {_ln}")
+    else:
+        st.caption("Decision-intelligence summary not available yet (intelligence.py builds it).")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
