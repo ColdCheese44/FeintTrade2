@@ -122,12 +122,15 @@ Register-MhTask "Trading - EOD" "run_eod.bat" `
 Register-MhTask "Trading - After Hours" "run_afterhours.bat" `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek $weekdays -At 6:15PM) "After-hours wrap + detailed Discord report"
 
-# hourly, 24/7 — crypto cycle
+# every 2 hours, 24/7 — crypto cycle. Set to BI-HOURLY permanently on 2026-06-15; keep the
+# interval here in sync so re-running this registrar never reverts it to hourly. (Task name
+# stays "Trading - Crypto Hourly" to overwrite the existing task in place — renaming would
+# orphan the live one.)
 $crypto = New-ScheduledTaskTrigger -Daily -At 12:00AM
 $crypto.Repetition = (New-ScheduledTaskTrigger -Once -At 12:00AM `
-    -RepetitionInterval (New-TimeSpan -Hours 1) `
+    -RepetitionInterval (New-TimeSpan -Hours 2) `
     -RepetitionDuration (New-TimeSpan -Hours 24)).Repetition
-Register-MhTask "Trading - Crypto Hourly" "run_crypto.bat" $crypto "24/7 hourly crypto scored cycle"
+Register-MhTask "Trading - Crypto Hourly" "run_crypto.bat" $crypto "24/7 bi-hourly crypto scored cycle (every 2h)"
 
 # hourly, 24/7 — free-source market research synthesis (continuous strategy refinement)
 $research = New-ScheduledTaskTrigger -Daily -At 12:10AM
