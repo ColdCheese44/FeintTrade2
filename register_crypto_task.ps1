@@ -1,24 +1,25 @@
-# Run this script as Administrator once to register the hourly crypto trading task.
+# DEPRECATED standalone helper — register_all_tasks.ps1 is the single source of truth for
+# ALL scheduled tasks. This file is kept only so an older runbook referencing it doesn't
+# break; it now registers the SAME 24/7 hourly crypto schedule as register_all_tasks.ps1.
+# It previously scheduled Mon-Fri ("24/5"), which would silently DOWNGRADE the live 24/7
+# crypto task if re-run after register_all_tasks.ps1. Crypto trades 24/7 — the trigger
+# below runs every day.
+#
+# Run this script as Administrator once to (re-)register the hourly crypto trading task.
+Write-Host "NOTE: register_crypto_task.ps1 is deprecated — register_all_tasks.ps1 is the canonical registrar."
 $xml = @'
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Crypto research and trading cycle — runs hourly Mon-Fri 24/5</Description>
+    <Description>Crypto research and trading cycle — runs hourly, every day (24/7)</Description>
   </RegistrationInfo>
   <Triggers>
     <CalendarTrigger>
       <StartBoundary>2026-06-02T00:00:00</StartBoundary>
       <Enabled>true</Enabled>
-      <ScheduleByWeek>
-        <DaysOfWeek>
-          <Monday/>
-          <Tuesday/>
-          <Wednesday/>
-          <Thursday/>
-          <Friday/>
-        </DaysOfWeek>
-        <WeeksInterval>1</WeeksInterval>
-      </ScheduleByWeek>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
       <Repetition>
         <Interval>PT1H</Interval>
         <Duration>P1D</Duration>

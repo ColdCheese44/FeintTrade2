@@ -26,6 +26,16 @@ COMMANDS = {"!status", "!positions", "!strategies", "!orders", "!price", "!buy",
             "!channels", "!test", "!summary", "!digest", "!research", "!benchmark",
             "!ask", "!explain", "!usage", "!cost", "!tests", "!intel", "!lab", "!council", "!quote"}
 
+# Optional operator allowlist for privileged trading commands (!buy/!sell/!kill/
+# !resume/!cancel). When DISCORD_OPERATOR_USER_IDS / DISCORD_OPERATOR_ROLE_IDS are set
+# in .env, those commands run only for the listed users/roles (channel restriction still
+# applies). When unset, behavior is unchanged. See scripts/discord_auth.py.
+sys.path.insert(0, str(ROOT / "scripts"))
+try:
+    import discord_auth
+except Exception:
+    discord_auth = None
+
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
@@ -133,6 +143,20 @@ async def on_message(message: discord.Message):
         if content.startswith("!"):
             await message.reply(f"Unknown command `{command}`. Use `!help` to see all commands.")
         return
+
+    # Optional operator allowlist (in addition to the channel restriction). Privileged
+    # trading commands are refused — and logged, never executed — for non-allowlisted
+    # users when DISCORD_OPERATOR_USER_IDS / DISCORD_OPERATOR_ROLE_IDS are configured.
+    if discord_auth is not None and discord_auth.is_privileged(command):
+        role_ids = [r.id for r in getattr(message.author, "roles", []) or []]
+        if not discord_auth.is_authorized(command, message.author.id, role_ids):
+            print(f"DENIED privileged command {command} from "
+                  f"{message.author} (id={message.author.id}) — not in operator allowlist")
+            await message.reply(
+                f"⛔ `{command}` is restricted to authorized operators. "
+                f"Your account is not on the allowlist."
+            )
+            return
 
     # !heartbeat — full research + decision cycle, runs async (2-3 min)
     if command == "!heartbeat":

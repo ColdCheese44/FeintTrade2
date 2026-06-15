@@ -352,6 +352,34 @@ def swing_stop_pct() -> float:
         return -3.0
 
 
+# ── Conviction-based position sizing factor ───────────────────────────────────
+# Single source of truth for the POSITION SIZING formula in CLAUDE.md and the
+# research auto-buy. The model is instructed to size at
+#     equity × max_allocation_pct × conviction_factor(score),
+# and the system multiplies by the regime multiplier. Enforcing this factor
+# DETERMINISTICALLY (orchestrator._execute_orders) is what stops a model order whose
+# JSON qty ignores its own conviction sizing from placing an oversized position —
+# e.g. the score-6 TQQQ order that wrote "Correcting: qty=257" in its reasoning but
+# emitted "qty": 461 in JSON. Aggressive profile (watchlist.json trading_style.profile).
+def conviction_factor(score, default=None):
+    """Position-sizing multiplier (0 < f <= 1) for a conviction/score of 1-10:
+        9-10 -> 1.00,  7-8 -> 0.85,  5-6 -> 0.55,  below 5 -> 0.30.
+    Returns `default` when `score` is not a usable number, so callers can choose the
+    fallback (e.g. 1.0 = apply no conviction reduction, leaving only the hard
+    allocation cap to bind)."""
+    try:
+        s = int(round(float(score)))
+    except (TypeError, ValueError):
+        return default
+    if s >= 9:
+        return 1.00
+    if s >= 7:
+        return 0.85
+    if s >= 5:
+        return 0.55
+    return 0.30
+
+
 def load_live_account() -> dict:
     """
     Live-trading sizing profile. When enabled, the agent should size as if the

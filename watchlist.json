@@ -21,7 +21,7 @@
     "close_at_dte": 1,
     "underlyings": ["NVDA", "TSLA", "AMD", "SPY", "QQQ"]
   },
-  "notes": "Process goal: maximize risk-adjusted paper P&L while keeping drawdown < 6%, cash reserve > 5%, and all caps enforced. Aspirational target 10x/30d is secondary to never breaking a hard rule. Equity positions close 1:45 PM MT. Crypto 24/7. Regime filter applies.",
+  "notes": "Process goal: maximize risk-adjusted paper P&L while keeping drawdown < 6%, cash reserve > 5%, and all caps enforced. Aspirational target 10x/30d is secondary to never breaking a hard rule. SWING mode: positions are held multi-day while the thesis holds — there is NO forced intraday/EOD equity flatten (the only code-enforced same-session liquidation is the no-overnight UVXY rule). Crypto 24/7. Regime filter applies.",
 
   "risk": {
     "cash_reserve_pct": 5,
@@ -33,7 +33,7 @@
     "default_unlisted_max_alloc_pct": 10,
     "loss_streak_throttle": 3,
     "loss_streak_lockout_threshold": 2,
-    "note": "Code-enforced hard constraints (scripts/trade.py validate_order). Cash, allocation, concentration, and position-count caps stay enforced. Daily soft/hard stops are advisory only while connected to Alpaca paper trading."
+    "note": "Code-enforced hard constraints (scripts/trade.py validate_order). Cash, allocation, concentration, and position-count caps stay enforced. Daily soft/hard stops are CODE-ENFORCED whenever disable_daily_stops_in_paper=false (the current setting) — including on paper: soft blocks new buys, hard goes reduce-only, reset each session. Set disable_daily_stops_in_paper=true to make them advisory on paper only; live is always enforced."
   },
 
   "validation_mode": {

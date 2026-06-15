@@ -53,7 +53,9 @@ in service of the swing rules above. Ignore the "close equity by 1:45 PM" / day-
 
 **Time zone:** All times are U.S. Mountain — **MDT** (summer, UTC−6) / **MST** (winter, UTC−7).
 The code auto-detects which via `America/Denver`; timestamps carry the live label. Market open
-07:30, equity flatten 1:45 PM, regular close 2:00 PM, extended close 6:00 PM (all Mountain).
+07:30, regular close 2:00 PM, extended close 6:00 PM (all Mountain). Under SWING mode there is
+**no forced equity flatten** — positions are held multi-day while the thesis holds (the only
+code-enforced same-session liquidation is the no-overnight UVXY rule in the after-hours wrap).
 
 ---
 
@@ -75,7 +77,10 @@ The code auto-detects which via `America/Denver`; timestamps carry the live labe
   are exempt, so a risk-off SQQQ/SOXS posture is never throttled. (code-enforced)
 - Leveraged LONG ETFs (TQQQ/SOXL/FNGU/LABU/FAS) cannot be bought in BEAR or PANIC regime —
   use an inverse ETF (SQQQ/SOXS) for downside instead. (code-enforced)
-- Daily drawdown thresholds are advisory in paper trading and enforced in live trading.
+- Daily drawdown soft/hard stops are **code-enforced** whenever `risk.disable_daily_stops_in_paper=false`
+  (the current setting) — including on paper. At the soft threshold new buys are blocked; at the hard
+  threshold the book goes reduce-only. Set `disable_daily_stops_in_paper=true` to make them advisory on
+  paper only; live is always enforced regardless. (see `common.daily_stops_enforced`)
 - Limit orders only. Honor `kill.flag`. Stops are mandatory at the regime threshold.
 - The system applies the regime multiplier to every BUY automatically — size at FULL
   `max_allocation_pct × conviction_factor` and do NOT pre-multiply.
@@ -231,7 +236,7 @@ Signals required (3+ of 4):
 Entry: Buy limit on first 5-min pullback to VWAP or opening range high, within 0.2% of ask
 Target: Gap extension — prior day range x 1.5, or previous resistance
 Stop: Below 5-min opening bar low (or regime stop %, whichever is closer)
-Exit: At target or by 1:45 PM MT
+Exit: At target, on stop, or thesis break (SWING — no forced 1:45 PM flatten)
 Best instruments: TQQQ, SOXL, NVDA, TSLA, MSTR, LABU
 Skip if: Gap fills immediately, no volume confirmation, earnings within 3 days without confirmed beat
 
@@ -249,7 +254,7 @@ Signals required (3+ of 4):
 Entry: Buy limit on the candle that closes above VWAP
 Target: 1x ATR14 above VWAP, or next pivot R1 level
 Stop: Below VWAP (price losing VWAP = thesis invalid)
-Exit: Target, VWAP failure, or 1:45 PM MT
+Exit: Target, VWAP failure, or thesis break (SWING — no forced 1:45 PM flatten)
 Best instruments: NVDA, AMD, PLTR, TQQQ (BULL), TSLA
 Skip if: RSI >70 at entry, volume declining, daily EMA is bearish
 
@@ -268,7 +273,7 @@ Signals required (4+ of 5):
 Entry: Buy limit within 0.2% of the breakout level
 Target: Previous day high + ATR14
 Stop: Just below previous day's high (now support)
-Exit: Target, RSI >80, or 1:45 PM MT
+Exit: Target, RSI >80, or thesis break (SWING — no forced 1:45 PM flatten)
 Best instruments: TQQQ, SOXL, NVDA, TSLA, PLTR
 Skip if: Breakout on low volume, already up >8%, no daily trend support
 
@@ -413,7 +418,7 @@ Signals required (same as Momentum Breakout but inverted):
 Entry: Buy SQQQ on the breakdown bar, or UVXY if VIX spiking rapidly
 Target: SQQQ equivalent of 8-15% move
 Stop: -3% from entry in BEAR regime
-Exit: Target, regime shifts back to NEUTRAL, or 1:45 PM MT
+Exit: Target, regime shifts back to NEUTRAL, or thesis break (SWING — no forced 1:45 PM flatten; UVXY never overnight)
 Critical: UVXY is intraday only — never hold overnight. It decays rapidly.
 
 ---
@@ -422,10 +427,10 @@ Critical: UVXY is intraday only — never hold overnight. It decays rapidly.
 
 1. Limit orders only — never market orders. Within 0.2% of ask for buys.
 2. Stop-loss = regime stop — BULL: -5%, NEUTRAL: -4%, BEAR: -3%, PANIC: -2%. No averaging down. No exceptions.
-3. Daily drawdown limit: In live trading, portfolio down 6% from session open equity = halt all new entries. In paper trading, treat this as a caution threshold and tighten selectivity rather than forcing reduce-only mode.
+3. Daily drawdown limit: code-enforced soft/hard stops measured from session-open equity. In NORMAL mode the soft stop (−4%) blocks new buys and the hard stop (−6%) makes the book reduce-only; validation mode uses tighter −2%/−3% thresholds. These are ENFORCED on paper while `risk.disable_daily_stops_in_paper=false` (current setting) and always enforced live. Existing stops/exits keep running; thresholds reset each session.
 4. Cash reserve: Maintain 5% cash at all times. Never deploy 100%.
 5. Max open positions: 8 simultaneously. Quality over quantity.
-6. Close equity by 1:45 PM MT — no exceptions unless a specific overnight catalyst is written in the journal with target and thesis.
+6. SWING holds — there is **no forced intraday/EOD equity flatten** (the old day-trade 1:45 PM flatten is removed). Carry positions multi-day while the thesis and trend hold; exit only on the stop, a trailing-stop give-back, or a thesis break. The sole code-enforced same-session liquidation is the no-overnight UVXY rule (rule 8).
 7. Earnings risk: Earnings within 3 days = reduce size by 75% or skip.
 8. No UVXY overnight — it decays rapidly. Enter and exit same session.
 9. Correlation limit: Never hold more than 4 positions in the same sector simultaneously (e.g., TQQQ + SOXL + FNGU + NVDA = 4 tech longs = maximum).
@@ -520,8 +525,7 @@ Registered by `register_all_tasks.ps1`. The flow is **research → synthesis (jo
 | 7:45 AM | Morning Research (writes journal) | run_research.bat → research |
 | 8:00 AM | Trading Session (reads journal, decides) | run_trading.bat → trading |
 | Every 15 min (7:30–2:00) | Intraday Cycle (fresh data, stops, entries) | run_intraday.bat → cycle |
-| 1:45 PM | Equities flatten | (enforced by cycle/EOD) |
-| 2:15 PM | End of Day + detailed report | run_eod.bat → eod |
+| 2:15 PM | End of Day + detailed report (SWING — no forced flatten) | run_eod.bat → eod |
 | 6:15 PM | After-hours wrap + detailed report | run_afterhours.bat → afterhours |
 | Hourly, 24/7 | Crypto Cycle | run_crypto.bat → crypto |
 | Hourly, 24/7 | Market Research (free-source synthesis → strategy bias) | run_market_research.bat → market_research.py |

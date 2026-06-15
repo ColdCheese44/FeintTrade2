@@ -34,6 +34,7 @@ from common import (  # noqa: E402
     get_effective_caps,
     is_crypto,
     is_option,
+    load_live_account,
     load_options_config,
     load_risk,
     make_http_session,
@@ -233,6 +234,35 @@ def _pending_crypto_notional() -> float:
         return 0.0
 
 
+def deterministic_position_qty_cap(price, equity, alloc_pct, regime_mult=1.0,
+                                   conviction_factor=1.0, existing_long_mv=0.0,
+                                   safety=0.99):
+    """
+    Maximum BUY quantity allowed under the documented POSITION SIZING formula — the
+    deterministic guardrail behind orchestrator._execute_orders. Pure arithmetic (no
+    I/O), so it is trivially unit-testable.
+
+        notional_cap = equity × alloc_pct/100 × regime_mult × conviction_factor
+        qty_cap      = max(0, notional_cap − existing_long_mv) / price × safety
+
+    `existing_long_mv` is the symbol's current LONG market value so a scale-in only
+    fills the remaining headroom (never stacks a second full-size tranche). `safety`
+    (<1) leaves a sliver so a re-priced marketable limit can't tip the fill back over
+    the cap. Returns (qty_cap, headroom_notional). A non-positive price/equity (or a
+    zero-conviction factor) returns (0.0, 0.0).
+    """
+    try:
+        price = float(price)
+        equity = float(equity)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    if price <= 0 or equity <= 0:
+        return 0.0, 0.0
+    notional_cap = equity * (float(alloc_pct) / 100.0) * float(regime_mult) * float(conviction_factor)
+    headroom = max(0.0, notional_cap - max(0.0, float(existing_long_mv)))
+    return (headroom / price) * float(safety), headroom
+
+
 def validate_order(symbol, qty, side, current_price, account, positions,
                    watchlist_limit_pct=10, risk=None, position_pnl_pct=None,
                    check_session_dedup=True, completed_trades=None):
@@ -296,6 +326,20 @@ def validate_order(symbol, qty, side, current_price, account, positions,
                 f"BUY BLOCKED - SOFT STOP active (day P&L hit -{soft_limit:.0f}% limit). "
                 f"No new buy/open orders permitted today."
             )
+
+    # ── Minimum order size (live-sim) ─────────────────────────────────────────────
+    # Skip dust orders below live_account.min_order_usd. This binds on BUYS only
+    # (sells de-risk and are never blocked). `order_value` is the FINAL notional —
+    # the orchestrator scales qty by regime × live_scale BEFORE calling, so a live-sim
+    # order scaled below the floor is rejected here rather than placed as dust. Policy
+    # is SKIP, never round up (rounding up would breach the very sizing it enforces).
+    # Missing/zero config -> no floor (load_live_account defaults min_order_usd to 1.0).
+    min_order_usd = float((load_live_account() or {}).get("min_order_usd", 0) or 0)
+    if min_order_usd > 0 and order_value < min_order_usd - 1e-9:
+        return False, (
+            f"BUY BLOCKED - order notional ${order_value:,.2f} is below the "
+            f"live_account.min_order_usd ${min_order_usd:,.2f} minimum ({sym_norm}); skipped."
+        )
 
     # ── Options (long calls/puts) — premium-based caps, not the equity/crypto rules ──
     if is_option(symbol):

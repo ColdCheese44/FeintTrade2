@@ -40,7 +40,15 @@ sys.path.insert(0, str(ROOT / "scripts"))
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from common import now_mt_str, today_mt, normalize_positions, is_crypto, load_risk  # noqa: E402
+from common import (  # noqa: E402
+    now_mt_str, today_mt, normalize_positions, is_crypto, load_risk, make_http_session,
+)
+
+# Retry-resilient session for the trade-critical Alpaca GETs below, so a transient
+# DNS/timeout blip (e.g. a VPN tunnel reconnect) rides out the backoff instead of being
+# reported as a false "Alpaca unreachable" outage. Idempotent GETs only — diagnostics
+# never places orders. A genuine, sustained outage still surfaces after retries exhaust.
+_HTTP = make_http_session()
 
 try:
     import discord_notify as dn
@@ -86,7 +94,7 @@ def _check_env(r):
 
 def _check_alpaca(r):
     try:
-        acct = requests.get(f"{BASE_URL}/v2/account", headers=HEADERS, timeout=10).json()
+        acct = _HTTP.get(f"{BASE_URL}/v2/account", headers=HEADERS, timeout=10).json()
         eq = float(acct.get("equity", 0))
         r.good(f"Alpaca account reachable — equity ${eq:,.0f}, status {acct.get('status')}")
         if acct.get("crypto_status") != "ACTIVE":
@@ -95,16 +103,17 @@ def _check_alpaca(r):
             r.error("Account is BLOCKED for trading")
         return acct
     except Exception as e:
-        r.error(f"Alpaca account unreachable: {e}")
+        r.error(f"Alpaca account unreachable after retries (sustained outage, not a "
+                f"transient blip): {e}")
         return {}
 
 
 def _check_positions_and_risk(r, acct, fix):
     try:
         positions = normalize_positions(
-            requests.get(f"{BASE_URL}/v2/positions", headers=HEADERS, timeout=10).json())
+            _HTTP.get(f"{BASE_URL}/v2/positions", headers=HEADERS, timeout=10).json())
     except Exception as e:
-        r.error(f"Positions unreachable: {e}")
+        r.error(f"Positions unreachable after retries: {e}")
         return []
     risk = load_risk()
     eq = float(acct.get("equity", 0) or 0)
@@ -128,6 +137,27 @@ def _check_positions_and_risk(r, acct, fix):
     return positions
 
 
+def _quarantine_corrupt(path: Path) -> Path:
+    """
+    Copy a corrupt state file into data/quarantine/ with a timestamp BEFORE it is
+    reset, so the original (possibly forensically useful) bytes are never lost. Returns
+    the quarantine path. Uses a byte-for-byte copy (no decode) so even undecodable
+    content is preserved verbatim. Raises if the backup cannot be written — the caller
+    must NOT reset the file unless the backup succeeded.
+    """
+    qdir = DATA_DIR / "quarantine"
+    qdir.mkdir(parents=True, exist_ok=True)
+    stamp = now_mt_str("%Y%m%d_%H%M%S").split(" ")[0]
+    dest = qdir / f"{path.name}.corrupt.{stamp}"
+    # Avoid clobbering a same-second quarantine (rapid re-runs) — suffix a counter.
+    i = 1
+    while dest.exists():
+        dest = qdir / f"{path.name}.corrupt.{stamp}.{i}"
+        i += 1
+    dest.write_bytes(path.read_bytes())
+    return dest
+
+
 def _check_data_integrity(r, fix):
     DATA_DIR.mkdir(exist_ok=True)
     for name in ("open_trades.json", "performance.json"):
@@ -139,8 +169,17 @@ def _check_data_integrity(r, fix):
             r.good(f"data/{name} valid")
         except Exception:
             if fix:
+                # Quarantine the corrupt file FIRST — only reset to empty if the
+                # evidence was safely preserved (never destroy state silently).
+                try:
+                    backup = _quarantine_corrupt(p)
+                except Exception as e:
+                    r.error(f"data/{name} is corrupt JSON — NOT reset "
+                            f"(could not quarantine evidence: {e})")
+                    continue
                 p.write_text("{}", encoding="utf-8")
-                r.fix(f"Repaired corrupt data/{name} (reset to empty)")
+                r.fix(f"Repaired corrupt data/{name} (reset to empty; "
+                      f"original quarantined to {backup.relative_to(ROOT)})")
             else:
                 r.error(f"data/{name} is corrupt JSON")
 

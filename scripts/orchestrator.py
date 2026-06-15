@@ -108,6 +108,7 @@ from common import (
     loss_streak_lockout_enforced, research_mode_active,
     force_autobuy_enabled, swing_mode_active, swing_stop_pct, trading_style,
     is_option, option_dte, load_options_config, options_enabled,
+    conviction_factor,
 )
 
 try:
@@ -264,6 +265,39 @@ _PRICES = {
     "claude-sonnet-4-6":            {"input":  3.0,  "output": 15.0},
     "claude-haiku-4-5-20251001":    {"input":  0.80, "output":  4.0},
 }
+
+def validate_model_config(models: dict | None = None) -> dict:
+    """
+    OFFLINE smoke-test of the configured Claude model IDs (watchlist.json
+    api_config.models) against the local pricing table (_PRICES) — the single source
+    of price data. Does NOT call the Anthropic API or place any order, so it is safe
+    to run anytime: `python scripts/orchestrator.py validate-models`.
+
+    A configured model with no _PRICES entry would silently bill at the Opus fallback
+    rate (see _log_usage), so it is flagged. Returns:
+      {"ok": bool, "models": {routine: {"model", "priced"}}, "unpriced": [...],
+       "priced_models": [...]}.
+    To verify the IDs against your actual Anthropic account/SDK, do a manual
+    non-trading probe, e.g.:
+        python -c "import anthropic; c=anthropic.Anthropic(); \
+                   print(c.messages.create(model='claude-opus-4-8', max_tokens=1, \
+                   messages=[{'role':'user','content':'ping'}]).model)"
+    """
+    if models is None:
+        try:
+            from common import load_watchlist
+            models = (load_watchlist().get("api_config") or {}).get("models") or {}
+        except Exception:
+            models = {}
+    out, unpriced = {}, []
+    for routine, model in (models or {}).items():
+        priced = model in _PRICES
+        out[routine] = {"model": model, "priced": priced}
+        if not priced and model not in unpriced:
+            unpriced.append(model)
+    return {"ok": not unpriced, "models": out, "unpriced": unpriced,
+            "priced_models": sorted(_PRICES.keys())}
+
 
 def _log_usage(routine: str, model: str, input_tokens: int, output_tokens: int):
     """Append one usage record. Non-blocking — never raises."""
@@ -804,7 +838,7 @@ def _research_autobuy(payload: dict, account: dict, positions: list,
     # Prefer new symbols, then highest score.
     qualifying.sort(key=lambda t: (t[1], -t[0]))
     sc, is_held, sym, ref, c = qualifying[0]
-    conv = 1.0 if sc >= 9 else 0.85 if sc >= 7 else 0.55 if sc >= 5 else 0.30  # aggressive profile
+    conv = conviction_factor(sc, default=0.30)  # aggressive profile (shared single source)
     alloc_pct = float(symbol_limits.get(sym, load_risk().get("default_unlisted_max_alloc_pct", 10)))
     qty = round((equity * (alloc_pct / 100.0) * conv) / ref, 8)
     if qty <= 0:
@@ -1143,6 +1177,7 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                 for p in positions
                 if normalize_symbol(p.get("symbol", ""), p.get("asset_class")) == sym
             )
+            # (1) HARD per-symbol allocation cap (the symbol's max_allocation_pct × regime).
             cap_value = real_equity * (regime_adj_limit / 100.0)
             headroom = cap_value - existing_long_mv
             if headroom <= 0:
@@ -1165,6 +1200,50 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                         "message": f"qty {qty} -> {clamped} to fit {regime_adj_limit:.1f}% cap",
                     })
                 qty = clamped
+
+            # (2) DETERMINISTIC CONVICTION/SCORE SIZING CAP — the model is told to size at
+            #     equity × max_alloc × conviction_factor(score); enforce that factor here so
+            #     a JSON qty that ignores its own conviction sizing can't place an oversized
+            #     position (the TQQQ score-6 order that reasoned "qty=257" but emitted 461).
+            #     The hard alloc cap above stays the outer bound; this is a tighter, soft
+            #     sizing cap that NEVER raises qty. No usable score -> 1.0 (no reduction).
+            conv = conviction_factor(order.get("score", order.get("conviction")), default=1.0)
+            if conv is not None and conv < 1.0 - 1e-9:
+                conv_qty, conv_headroom = trade.deterministic_position_qty_cap(
+                    price, real_equity, sym_limit, regime_mult=multiplier,
+                    conviction_factor=conv, existing_long_mv=existing_long_mv,
+                )
+                score_val = order.get("score", order.get("conviction"))
+                if conv_qty <= 0:
+                    log.info(
+                        f"SIZING SKIP {sym} buy — existing ${existing_long_mv:,.2f} already fills the "
+                        f"score-{score_val} conviction allocation (conv={conv:.2f} × "
+                        f"{regime_adj_limit:.1f}% cap); no headroom for an add."
+                    )
+                    if collect_events is not None:
+                        collect_events.append({
+                            "symbol": sym, "side": side, "status": "skipped",
+                            "message": (f"conviction sizing (score {score_val}, conv {conv:.2f}) "
+                                        f"leaves no headroom over existing ${existing_long_mv:,.0f}"),
+                        })
+                    continue
+                if qty > conv_qty + 1e-9:
+                    clamped = round(conv_qty, 8)
+                    req_notional = qty * price
+                    det_notional = conv_qty * price
+                    log.warning(
+                        f"SIZING CLAMP {sym} buy: requested qty {qty:g} (${req_notional:,.0f}) exceeds "
+                        f"deterministic conviction cap {clamped:g} (${det_notional:,.0f}) "
+                        f"[score={score_val}, conv={conv:.2f}, max_alloc={sym_limit:g}%, regime_mult={multiplier:g}]; "
+                        f"clamping to {clamped:g}."
+                    )
+                    if collect_events is not None:
+                        collect_events.append({
+                            "symbol": sym, "side": side, "status": "clamped",
+                            "message": (f"qty {qty:g} -> {clamped:g} to fit score-{score_val} conviction "
+                                        f"sizing (conv {conv:.2f} × {sym_limit:g}% × regime {multiplier:g})"),
+                        })
+                    qty = clamped
 
         # Get position P&L for duplicate-entry check
         pos_obj = next((p for p in positions
@@ -2985,6 +3064,16 @@ Be direct and actionable. Every number must appear. Flag anything requiring imme
 
 if __name__ == "__main__":
     routine = sys.argv[1] if len(sys.argv) > 1 else None
+
+    # Side-effect-free offline check — no trading machinery, no activity logging.
+    if routine == "validate-models":
+        _res = validate_model_config()
+        print(json.dumps(_res, indent=2))
+        if not _res["ok"]:
+            print(f"\n⚠️  Unpriced model IDs (would bill at Opus fallback rate): "
+                  f"{', '.join(_res['unpriced'])}")
+        sys.exit(0 if _res["ok"] else 1)
+
     try:
         import activity as _activity
     except Exception:
@@ -3014,7 +3103,7 @@ if __name__ == "__main__":
         elif routine == "usage":
             _print_usage_summary()
         else:
-            print("Usage: python scripts/orchestrator.py [research|trading|intraday|cycle|eod|afterhours|marketopen|crypto|report|usage]")
+            print("Usage: python scripts/orchestrator.py [research|trading|intraday|cycle|eod|afterhours|marketopen|crypto|report|usage|validate-models]")
             sys.exit(1)
         if _activity and routine:
             _activity.log("routine_done", routine)

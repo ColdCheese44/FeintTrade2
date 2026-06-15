@@ -437,7 +437,19 @@ def cmd_journal():
         return f"📓 No journal entry for {today_str} yet."
 
     content = _read_text_lossy(journal_file)
-    journal_file.write_text(content, encoding="utf-8", newline="\n")
+    # Heal legacy/mojibake encoding in place — but ONLY when sanitizing actually
+    # changed the bytes. A plain read command shouldn't rewrite an already-clean file
+    # (that surprise write churned the mtime on every !journal). Best-effort: never let
+    # a write failure (read-only FS, lock) break the read command.
+    try:
+        _current = journal_file.read_text(encoding="utf-8")
+    except Exception:
+        _current = None
+    if _current != content:
+        try:
+            journal_file.write_text(content, encoding="utf-8", newline="\n")
+        except Exception:
+            pass
     preview = _journal_preview(content)
     truncated = len(preview) < len(content)
     suffix = "\n(truncated — full journal in FeintTrade2/journal/)" if truncated else ""
