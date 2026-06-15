@@ -13,10 +13,21 @@ from here, so equities stay on the existing Alpaca→yfinance path.) Everything 
 to None / {} — this is supplementary, never a hard dependency.
 """
 
+import json
+import time
+from pathlib import Path
+
 import requests
 
 _TIMEOUT = 8
 _H = {"User-Agent": "FeintTrade/1.0"}
+
+# FX rates feed the USD-strength macro signal injected into EVERY routine prompt
+# (_load_context). The ECB/Frankfurter source publishes once per business day, so a live
+# fetch per routine (hourly crypto + every-15-min cycles = 50+/day) is pure waste and adds
+# an 8s-timeout failure surface to the hot path. Cache to disk with a generous TTL.
+_CACHE = Path(__file__).parent.parent / "data" / "cache" / "fx_rates.json"
+_FX_TTL = 6 * 3600  # 6h — far shorter than the daily ECB cadence, so never stale
 
 _CG_IDS = {
     "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "DOGE": "dogecoin",
@@ -74,11 +85,39 @@ def fx_rates(base="USD", quotes=("EUR", "GBP", "JPY", "CAD", "AUD", "CHF")) -> d
         return {}
 
 
+def _cached_fx_rates(base="USD", quotes=("EUR", "GBP", "JPY", "CAD", "AUD", "CHF")) -> dict:
+    """fx_rates() with a disk TTL cache so the live no-arg path doesn't re-fetch every
+    routine. Returns the last good rates if the network is down and a cache exists."""
+    try:
+        raw = json.loads(_CACHE.read_text(encoding="utf-8"))
+        if raw.get("rates") and (time.time() - raw.get("ts", 0)) < _FX_TTL:
+            return raw["rates"]
+    except Exception:
+        pass
+    rates = fx_rates(base, quotes)
+    if rates:
+        try:
+            _CACHE.parent.mkdir(parents=True, exist_ok=True)
+            _CACHE.write_text(json.dumps({"ts": time.time(), "rates": rates}), encoding="utf-8")
+        except Exception:
+            pass
+        return rates
+    # Network failed and cache was stale/absent: fall back to a stale cache if we have one
+    # (a day-old USD index still beats no macro signal at all).
+    try:
+        raw = json.loads(_CACHE.read_text(encoding="utf-8"))
+        if raw.get("rates"):
+            return raw["rates"]
+    except Exception:
+        pass
+    return {}
+
+
 def usd_strength(rates=None):
     """Free DXY-proxy: mean of USD vs majors, indexed to 100 at the baseline. Higher =
     stronger USD (a risk-off headwind for risk assets). None if unavailable.
     Pass `rates` for hermetic tests."""
-    rates = rates if rates is not None else fx_rates()
+    rates = rates if rates is not None else _cached_fx_rates()
     if not rates:
         return None
     ratios = [rates[k] / _FX_BASELINE[k] for k in _FX_BASELINE if k in rates and _FX_BASELINE[k]]

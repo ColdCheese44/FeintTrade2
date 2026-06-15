@@ -42,6 +42,31 @@ def test_crypto_price_falls_back_to_coingecko(monkeypatch):
     assert pdm.crypto_price("BTC/USD") == 1234.5
 
 
+def test_cached_fx_rates_avoids_refetch(monkeypatch, tmp_path):
+    """Second call within TTL must read the cache, not re-hit the network."""
+    monkeypatch.setattr(pdm, "_CACHE", tmp_path / "fx.json")
+    calls = {"n": 0}
+
+    def _fake_fetch(base="USD", quotes=()):
+        calls["n"] += 1
+        return dict(pdm._FX_BASELINE)
+
+    monkeypatch.setattr(pdm, "fx_rates", _fake_fetch)
+    r1 = pdm._cached_fx_rates()
+    r2 = pdm._cached_fx_rates()
+    assert r1 == r2 == dict(pdm._FX_BASELINE)
+    assert calls["n"] == 1                       # only ONE live fetch despite two calls
+
+
+def test_cached_fx_rates_serves_stale_when_network_down(monkeypatch, tmp_path):
+    """If the live fetch fails but a (possibly stale) cache exists, serve it."""
+    cache = tmp_path / "fx.json"
+    cache.write_text('{"ts": 0, "rates": {"EUR": 0.92}}', encoding="utf-8")  # ts=0 → stale
+    monkeypatch.setattr(pdm, "_CACHE", cache)
+    monkeypatch.setattr(pdm, "fx_rates", lambda *a, **k: {})                 # network down
+    assert pdm._cached_fx_rates() == {"EUR": 0.92}
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))
