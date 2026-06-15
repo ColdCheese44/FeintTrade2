@@ -640,7 +640,9 @@ def _notify_proposal(routine: str, payload: dict, regime: dict | None = None):
         if not has_action and not cfg.get("proposal_alerts_when_idle", False):
             return
         regime_label = (regime or {}).get("regime", "")
-        _notify("decision_proposal", routine, payload, regime_label)
+        cycle_id = payload.get("cycle_id") or f"{routine}-{now_mt_dt().strftime('%H%M%S')}"
+        payload["cycle_id"] = cycle_id   # shared by the executed + training posts for audit
+        _notify("decision_proposal", routine, payload, regime_label, "", cycle_id)
         # Notify-only decision card to #ft-approvals (autonomous — FYI/override surface).
         if orders or closes:
             _notify("approval_card", routine, orders, regime_label)
@@ -648,7 +650,7 @@ def _notify_proposal(routine: str, payload: dict, regime: dict | None = None):
         # regardless of outcome (throttled by the training channel cooldown).
         try:
             import teaching
-            teaching.teach_from_payload(payload, regime_label)
+            teaching.teach_from_payload(payload, regime_label, cycle_id)
         except Exception as te:
             log.warning(f"Teaching post failed for {routine}: {te}")
     except Exception as e:
@@ -684,6 +686,8 @@ def _notify_decision_executed(routine: str, payload: dict,
             closes_placed or [],
             execution_events or [],
             regime_label,
+            "",
+            payload.get("cycle_id", ""),
         )
     except Exception as e:
         log.warning(f"Decision-executed notification failed for {routine}: {e}")

@@ -226,7 +226,7 @@ def make_card(lesson: dict) -> bytes:
 
 # ── Post to #ft-training-post ─────────────────────────────────────────────────────
 
-def teach(decision: dict, dedup_key: str | None = None) -> bool:
+def teach(decision: dict, dedup_key: str | None = None, cycle_id: str = "") -> bool:
     """Build a lesson + card from a decision dict and post to #ft-training-post."""
     lesson = lesson_for(decision)
     try:
@@ -244,6 +244,8 @@ def teach(decision: dict, dedup_key: str | None = None) -> bool:
         "description": desc[:2000],
         "color": (COLORS.get(lesson["action"], MUTE)[0] << 16) + (COLORS.get(lesson["action"], MUTE)[1] << 8) + COLORS.get(lesson["action"], MUTE)[2],
     }
+    if cycle_id:
+        embed["footer"] = {"text": f"🔗 cycle {cycle_id}"}
     dk = dedup_key or f"teach:{lesson['action']}:{decision.get('symbol', '')}"
     try:
         import discord_channels as dch
@@ -255,7 +257,7 @@ def teach(decision: dict, dedup_key: str | None = None) -> bool:
         return False
 
 
-def teach_from_payload(payload: dict, regime: str = "") -> bool:
+def teach_from_payload(payload: dict, regime: str = "", cycle_id: str = "") -> bool:
     """Pick the most instructive decision from a proposal payload and teach it.
     Teaches the lead order if any, else the stand-pat (cash) stance."""
     payload = payload or {}
@@ -276,7 +278,7 @@ def teach_from_payload(payload: dict, regime: str = "") -> bool:
     else:
         lead = {"symbol": "the market", "action": "NO_TRADE", "regime": regime,
                 "reasoning": (payload.get("summary") or "")}
-    return teach(lead)
+    return teach(lead, cycle_id=cycle_id)
 
 
 if __name__ == "__main__":

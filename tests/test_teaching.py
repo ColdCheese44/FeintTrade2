@@ -56,7 +56,7 @@ def test_make_card_no_trade_renders():
 
 def test_teach_from_payload_picks_lead_order(monkeypatch):
     captured = {}
-    monkeypatch.setattr(teaching, "teach", lambda d, dedup_key=None: captured.update(d) or True)
+    monkeypatch.setattr(teaching, "teach", lambda d, dedup_key=None, cycle_id="": captured.update(d) or True)
     payload = {"orders": [{"symbol": "TSLA", "side": "buy", "conviction": 8,
                            "setup_type": "breakout", "limit_price": 250}], "summary": "x"}
     teaching.teach_from_payload(payload, "BULL")
@@ -66,7 +66,7 @@ def test_teach_from_payload_picks_lead_order(monkeypatch):
 
 def test_teach_from_payload_no_trade(monkeypatch):
     captured = {}
-    monkeypatch.setattr(teaching, "teach", lambda d, dedup_key=None: captured.update(d) or True)
+    monkeypatch.setattr(teaching, "teach", lambda d, dedup_key=None, cycle_id="": captured.update(d) or True)
     teaching.teach_from_payload({"orders": [], "closes": [], "summary": "nothing qualifies"}, "NEUTRAL")
     assert captured.get("action") == "NO_TRADE"
 

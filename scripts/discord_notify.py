@@ -81,7 +81,7 @@ def _with_pnl(fields):
     return fields
 
 
-def _build_embed(title, description, color=GREY, fields=None):
+def _build_embed(title, description, color=GREY, fields=None, footer=None):
     embed = {
         "title": title,
         "description": description[:4000] if description else "",
@@ -90,16 +90,18 @@ def _build_embed(title, description, color=GREY, fields=None):
     }
     if fields:
         embed["fields"] = fields
+    if footer:
+        embed["footer"] = {"text": str(footer)[:2048]}
     return embed
 
 
-def send(title, description, color=GREY, fields=None, msg_type="info", dedup_key=None):
+def send(title, description, color=GREY, fields=None, msg_type="info", dedup_key=None, footer=None):
     """
     Build an embed and route it to the channel mapped from msg_type (see the
     watchlist.json 'discord.routing' map). Falls back to command_post then the
     webhook. msg_type defaults to a general post when a caller doesn't specify one.
     """
-    embed = _build_embed(title, description, color, fields)
+    embed = _build_embed(title, description, color, fields, footer)
     if dch:
         dch.post(msg_type, embed=embed, dedup_key=dedup_key)
 
@@ -167,7 +169,7 @@ def _fmt_price(value):
         return "—"
 
 
-def decision_proposal(routine, payload, regime_label="", title_prefix=""):
+def decision_proposal(routine, payload, regime_label="", title_prefix="", cycle_id=""):
     """
     Post the agent's PROPOSED decision for a cycle (what it intends to do),
     independent of execution. This is the 'trade proposal' alert — it fires even
@@ -187,13 +189,29 @@ def decision_proposal(routine, payload, regime_label="", title_prefix=""):
                 return f" · conv {o.get(k)}"
         return ""
 
+    def _rr_extra(o, px):
+        stop = o.get("stop") or o.get("stop_price")
+        target = o.get("target") or o.get("target_price")
+        if not stop or not px:
+            return ""
+        parts = [f"stop {_fmt_price(stop)}"]
+        if target:
+            parts.append(f"tgt {_fmt_price(target)}")
+            try:
+                rr = abs(float(target) - float(px)) / abs(float(px) - float(stop))
+                if rr:
+                    parts.append(f"R:R {rr:.1f}")
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+        return "  ·  " + " · ".join(parts)
+
     order_lines = []
     for o in orders[:8]:
         side = str(o.get("side", "buy")).upper()
         px = o.get("limit_price", o.get("reference_price"))
         order_lines.append(
             f"{'🟢' if side == 'BUY' else '🔴'} {side} {o.get('qty', '?')} "
-            f"{o.get('symbol', '?')} @ {_fmt_price(px)}{_conv(o)}"
+            f"{o.get('symbol', '?')} @ {_fmt_price(px)}{_conv(o)}{_rr_extra(o, px)}"
         )
     close_lines = [
         f"⏹️ CLOSE {c.get('symbol', '?')}"
@@ -247,11 +265,12 @@ def decision_proposal(routine, payload, regime_label="", title_prefix=""):
         description=f"{tldr}\n\n{body}"[:1800],
         color=color,
         fields=_with_pnl(fields),
+        footer=f"🔗 cycle {cycle_id}" if cycle_id else None,
     )
 
 
 def decision_executed(routine, payload, orders_placed=None, closes_placed=None,
-                      execution_events=None, regime_label="", title_prefix=""):
+                      execution_events=None, regime_label="", title_prefix="", cycle_id=""):
     """
     Post the FINAL decision outcome for a cycle after execution has been attempted.
     This complements the proposal alert with what actually happened: orders placed,
@@ -325,6 +344,7 @@ def decision_executed(routine, payload, orders_placed=None, closes_placed=None,
         description=description[:1500],
         color=color,
         fields=_with_pnl(fields),
+        footer=f"🔗 cycle {cycle_id}" if cycle_id else None,
     )
 
 
