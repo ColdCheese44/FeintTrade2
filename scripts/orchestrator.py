@@ -653,6 +653,19 @@ def _notify_proposal(routine: str, payload: dict, regime: dict | None = None):
             teaching.teach_from_payload(payload, regime_label, cycle_id)
         except Exception as te:
             log.warning(f"Teaching post failed for {routine}: {te}")
+        # Optional council second opinion on high-conviction buys — triple-gated
+        # (enabled + auto_on_proposals + conviction >= threshold). OFF by default;
+        # advisory only, never affects autonomous execution.
+        try:
+            import council
+            if council.enabled() and council._cfg().get("auto_on_proposals"):
+                for o in orders:
+                    if (str(o.get("side", "")).lower() == "buy"
+                            and (o.get("conviction") or 0) >= council.min_conviction()):
+                        council.post(council.convene(o.get("symbol", ""), o.get("reasoning", "")))
+                        break
+        except Exception as ce:
+            log.warning(f"Council convene failed for {routine}: {ce}")
     except Exception as e:
         log.warning(f"Proposal notification failed for {routine}: {e}")
 

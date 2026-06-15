@@ -200,6 +200,14 @@
     "tracker_window_days": 14
   },
 
+  "council": {
+    "note": "OPT-IN multi-agent second opinion (scripts/council.py). When enabled, high-conviction setups get a technical/catalyst/risk analyst pass + a rule-based synthesis posted to #ft-research. ADVISORY ONLY — never changes autonomous execution. ~3x Haiku cost per convene. OFF by default; set enabled=true (and auto_on_proposals=true for automatic runs) to opt in.",
+    "enabled": false,
+    "auto_on_proposals": false,
+    "min_conviction": 8,
+    "analyst_model": "claude-haiku-4-5-20251001"
+  },
+
   "watchlist": [
     {
       "symbol": "TQQQ",

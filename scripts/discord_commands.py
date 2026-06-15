@@ -471,6 +471,7 @@ def cmd_help():
         "`!cost` — Anthropic API spend (month / projected / budget)\n"
         "`!tests` — run the test suite + post ✅/❌ per test to #ft-dev-log\n"
         "`!intel` — decision-intelligence audit (what the agent gets right/wrong)\n"
+        "`!council <SYM>` — multi-agent analyst second opinion (advisory)\n"
         "`!help` — this message"
     )
 
@@ -653,6 +654,28 @@ def cmd_intel():
         return f"❌ Intel audit failed: {e}"
 
 
+def cmd_council(*args):
+    """Convene the analyst council on a symbol — multi-agent second opinion (advisory)."""
+    if not args:
+        return ("Usage: `!council <SYMBOL>` — e.g. `!council NVDA`. A technical/catalyst/risk "
+                "analyst panel gives a second opinion (advisory — does not change trades).")
+    sym = normalize_symbol(args[0].upper())
+    try:
+        import council
+        v = council.convene(sym, context=f"Give your honest read on {sym} right now for a swing trade.")
+        council.post(v)
+        syn = v["synthesis"]
+        lines = [f"🏛️ **Council — {sym}: {syn['recommendation']}** "
+                 f"(avg {syn['avg_score']}/10 · risk {syn.get('risk_score', '?')}/10)",
+                 f"_{syn['rationale']}_"]
+        for role, a in v["analysts"].items():
+            lines.append(f"• {role.title()}: {a.get('score', '?')}/10")
+        lines.append("Full panel posted to #ft-research.")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"❌ Council failed: {e}"
+
+
 # No-arg commands
 COMMANDS = {
     "!status":     cmd_status,
@@ -685,6 +708,7 @@ ARG_COMMANDS = {
     "!report":  cmd_report,
     "!ask":     cmd_ask,
     "!explain": cmd_ask,
+    "!council": cmd_council,
 }
 
 
