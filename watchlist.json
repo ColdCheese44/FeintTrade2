@@ -252,17 +252,17 @@
     {
       "symbol": "SOXS",
       "type": "inverse_etf",
-      "description": "3x inverse Semiconductors (Direxion) — momentum LONG that profits when semis/tech fall; tradeable in ANY regime on its own confirmed bullish momentum (it rises as the market drops)",
+      "description": "3x inverse Semiconductors (Direxion) — DOWNSIDE trade for a confirmed semis/tech rotation-out. NOT a BULL-market dip-fade: code blocks SOXS buys in BULL after fading an up-tape lost -$1,608 (held ~4 days, decay). Trade only in NEUTRAL/BEAR/PANIC and do NOT swing-hold multi-day (-3x decays).",
       "max_allocation_pct": 15,
-      "regimes": ["BULL", "NEUTRAL", "BEAR", "PANIC"],
+      "regimes": ["NEUTRAL", "BEAR", "PANIC"],
       "strategies": ["short_momentum", "inverse_etf_momentum", "momentum_breakout"]
     },
     {
       "symbol": "SQQQ",
       "type": "inverse_etf",
-      "description": "3x inverse Nasdaq-100 — momentum LONG that profits when the Nasdaq falls; tradeable in ANY regime on its own confirmed bullish momentum (distribution days, rotations)",
+      "description": "3x inverse Nasdaq-100 — primary DOWNSIDE/bear trade for distribution days and rotations. NOT a BULL-market dip-fade: code blocks SQQQ buys in BULL (inverse-ETF dip-fades lost -$1,670 at 0% WR). Trade only in NEUTRAL/BEAR/PANIC and do NOT swing-hold multi-day (-3x decays).",
       "max_allocation_pct": 25,
-      "regimes": ["BULL", "NEUTRAL", "BEAR", "PANIC"],
+      "regimes": ["NEUTRAL", "BEAR", "PANIC"],
       "strategies": ["short_momentum", "inverse_etf_momentum", "momentum_breakout"]
     },
     {

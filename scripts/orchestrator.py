@@ -235,6 +235,31 @@ def _regime_blocks_leveraged_long(sym: str, regime_name: str) -> bool:
             and normalize_symbol(sym) in _leveraged_long_symbols())
 
 
+_INVERSE_ETF_TYPES = {"inverse_etf"}
+
+
+def _inverse_etf_symbols() -> set:
+    """Watchlist symbols flagged as leveraged INVERSE/hedge ETFs (SOXS/SQQQ/UVXY)."""
+    try:
+        return {normalize_symbol(s["symbol"])
+                for s in load_watchlist().get("watchlist", [])
+                if s.get("type") in _INVERSE_ETF_TYPES}
+    except Exception:
+        return set()
+
+
+def _regime_blocks_inverse_etf(sym: str, regime_name: str) -> bool:
+    """Data-driven hard rule (added 2026-06-15 from the trade log). NEVER buy a leveraged
+    inverse/hedge ETF (SOXS/SQQQ/UVXY) in a BULL regime. Buying a -3x inverse as a
+    'momentum long' to fade a one-day dip in an up-trending tape — then swing-holding it
+    for days — lost -$1,670 at a 0% win rate (SOXS -$1,608 held ~4 days, SQQQ -$63), the
+    single largest loss cluster in the book. That is fighting the tape on a decaying
+    instrument. Inverse ETFs are downside tools: permitted only when the headline regime
+    is NOT BULL (NEUTRAL/BEAR/PANIC). Mirror of _regime_blocks_leveraged_long."""
+    return (str(regime_name or "").upper() == "BULL"
+            and normalize_symbol(sym) in _inverse_etf_symbols())
+
+
 # ── API config helpers ────────────────────────────────────────────────────────
 
 def _api_cfg() -> dict:
@@ -984,15 +1009,15 @@ def _load_context() -> dict:
                 "compounding comes from.\n"
                 f"5. CONCENTRATE — at most {caps.get('max_open_positions', 5)} positions; put real size on the "
                 "1-3 best ideas rather than scattering tiny lots. Quality names, bigger conviction.\n"
-                "6. TRADE BOTH DIRECTIONS — do NOT just sit in cash when the long universe is red. When the "
-                "broad tape is CONFIRMED bearish (most names below VWAP, bearish squeeze RELEASES, negative "
-                "MACD, falling OBV — exactly today's setup), that IS a tradeable SHORT: BUY an INVERSE ETF "
-                "(SOXS for semis/tech, SQQQ for the Nasdaq; UVXY only intraday) — it RISES as the market falls, "
-                "so it scores as a normal momentum LONG. **This OVERRIDES the old SOP rule that inverse ETFs are "
-                "BEAR/PANIC-regime-only** — the headline regime label gates the LONG universe, but an inverse ETF "
-                "is bought purely on ITS OWN confirmed bullish momentum (above its VWAP, rising, MACD up) in ANY "
-                "regime, including BULL. If SOXS or SQQQ is the highest-scoring momentum-confirmed setup right now, "
-                "TAKE IT — that is the trade. Same -3% stop, same R:R, same trailing rules.\n"
+                "6. INVERSE ETFs = DOWNSIDE TRADES, NOT BULL-MARKET DIP-FADES. When the broad tape is CONFIRMED "
+                "bearish AND the headline regime is NOT BULL (NEUTRAL/BEAR/PANIC), an inverse ETF (SOXS for "
+                "semis/tech, SQQQ for the Nasdaq; UVXY intraday only) is a valid momentum trade — it rises as the "
+                "market falls. But the TRADE LOG is explicit: buying SOXS/SQQQ as a 'momentum long' to fade a "
+                "one-day dip in a BULL tape, then swing-holding it, lost -$1,670 at a 0% win rate (SOXS -$1,608 "
+                "held ~4 days) — fighting the tape on a -3x DECAYING instrument. So: do NOT buy inverse ETFs in a "
+                "BULL regime (code now BLOCKS it), and NEVER swing-hold a leveraged inverse ETF for days — they "
+                "lose to volatility decay; if you take one, it is a short-duration trade. In a bull tape with no "
+                "confirmed long setup, the correct move is CASH, not a counter-trend inverse.\n"
                 "7. CRYPTO = TREND-FOLLOWING ONLY. Buy crypto only when the DAILY trend is up (EMA9>EMA21, "
                 "price above) AND momentum confirms (squeeze released bullish / MACD bullish). Never buy a "
                 "coiling/bearish squeeze on the 'extreme fear is contrarian' thesis — that lost -$2,190 at "
@@ -1112,6 +1137,24 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
             msg = (f"BUY BLOCKED — {sym} is a leveraged LONG ETF; not permitted in "
                    f"{regime.get('regime')} regime (it decays against a down/panic tape). "
                    f"Use an inverse ETF (SQQQ/SOXS) to trade the downside instead.")
+            log.warning(msg)
+            print(f"  REJECTED (regime): {sym} — {msg}")
+            _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+            if collect_events is not None:
+                collect_events.append({
+                    "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                })
+            continue
+
+        # ── Data-driven hard rule (2026-06-15): no leveraged INVERSE ETFs in BULL ──
+        # Fading an up-trending tape with a decaying -3x inverse (SOXS/SQQQ), then
+        # swing-holding it, lost -$1,670 at a 0% win rate. Inverse ETFs are downside
+        # tools — only buy them when the regime is NOT BULL (NEUTRAL/BEAR/PANIC).
+        if side == "buy" and _regime_blocks_inverse_etf(sym, regime.get("regime", "")):
+            msg = (f"BUY BLOCKED — {sym} is a leveraged INVERSE ETF; not bought in a "
+                   f"{regime.get('regime')} regime. Fading an up-trending tape with a "
+                   f"decaying -3x inverse and holding it lost -$1,670 at 0% WR. Trade "
+                   f"inverse ETFs only when the regime is not BULL (NEUTRAL/BEAR/PANIC).")
             log.warning(msg)
             print(f"  REJECTED (regime): {sym} — {msg}")
             _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)

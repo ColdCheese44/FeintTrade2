@@ -136,5 +136,69 @@ def test_regime_blocks_leveraged_long(monkeypatch):
     assert orch._regime_blocks_leveraged_long("SQQQ", "PANIC") is False  # inverse ETF (the right downside tool)
 
 
+# ── Regime rule: no leveraged INVERSE ETFs in BULL (data-driven, 2026-06-15) ──
+
+def _inverse_watchlist(monkeypatch, orch):
+    monkeypatch.setattr(orch, "load_watchlist", lambda: {"watchlist": [
+        {"symbol": "TQQQ", "type": "leveraged_etf"},
+        {"symbol": "SOXS", "type": "inverse_etf"},
+        {"symbol": "SQQQ", "type": "inverse_etf"},
+        {"symbol": "UVXY", "type": "inverse_etf"},
+        {"symbol": "NVDA", "type": "equity"},
+    ]})
+
+
+def test_regime_blocks_inverse_etf_in_bull(monkeypatch):
+    """The trade-log fix: fading a BULL tape with a decaying -3x inverse (SOXS/SQQQ),
+    then holding it, lost -$1,670 at 0% WR. Inverse ETFs are blocked in BULL."""
+    orch = importlib.import_module("scripts.orchestrator")
+    _inverse_watchlist(monkeypatch, orch)
+
+    assert orch._regime_blocks_inverse_etf("SOXS", "BULL") is True
+    assert orch._regime_blocks_inverse_etf("SQQQ", "bull") is True       # case-insensitive
+    assert orch._regime_blocks_inverse_etf("UVXY", "BULL") is True
+    # Permitted (downside) regimes — inverse ETFs are the right tool there:
+    assert orch._regime_blocks_inverse_etf("SOXS", "NEUTRAL") is False
+    assert orch._regime_blocks_inverse_etf("SQQQ", "BEAR") is False
+    assert orch._regime_blocks_inverse_etf("SQQQ", "PANIC") is False
+    # Not an inverse ETF → never blocked by this rule:
+    assert orch._regime_blocks_inverse_etf("TQQQ", "BULL") is False      # leveraged LONG
+    assert orch._regime_blocks_inverse_etf("NVDA", "BULL") is False      # plain equity
+
+
+def test_execute_orders_rejects_inverse_etf_buy_in_bull(monkeypatch, tmp_path):
+    """End-to-end: a SOXS buy proposed in a BULL regime is rejected before place_order."""
+    import learning
+    monkeypatch.setattr(learning, "OPEN_TRADES", tmp_path / "open_trades.json")
+    monkeypatch.setattr(learning, "TRADE_LOG", tmp_path / "trade_log.jsonl")
+    monkeypatch.setattr(learning, "PERF_CACHE", tmp_path / "performance.json")
+
+    orch = importlib.import_module("scripts.orchestrator")
+    _inverse_watchlist(monkeypatch, orch)
+    placed = []
+    monkeypatch.setattr(orch.trade, "place_order",
+                        lambda *a, **k: placed.append(a) or {"id": "x"})
+    monkeypatch.setattr(orch, "_notify", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "check_daily_stop", lambda *a, **k: {"soft_stop": False, "hard_stop": False})
+    monkeypatch.setattr(orch, "kill_active", lambda: False)
+    monkeypatch.setattr(orch, "loss_streak_lockout_enforced", lambda: False)
+
+    events = []
+    orders = orch._execute_orders(
+        [{"symbol": "SOXS", "qty": 100, "side": "buy", "limit_price": 6.50,
+          "setup_type": "momentum_breakout", "conviction": 7, "score": 7,
+          "reasoning": "fade the semis dip"}],
+        account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
+        positions=[],
+        symbol_limits={"SOXS": 15},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"SOXS": "momentum_breakout"},
+        collect_events=events,
+    )
+    assert not placed, "an inverse-ETF buy in BULL must never reach place_order"
+    assert orders == []
+    assert any(e["status"] == "rejected" and "INVERSE" in e["message"] for e in events)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

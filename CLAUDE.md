@@ -77,6 +77,11 @@ code-enforced same-session liquidation is the no-overnight UVXY rule in the afte
   are exempt, so a risk-off SQQQ/SOXS posture is never throttled. (code-enforced)
 - Leveraged LONG ETFs (TQQQ/SOXL/FNGU/LABU/FAS) cannot be bought in BEAR or PANIC regime —
   use an inverse ETF (SQQQ/SOXS) for downside instead. (code-enforced)
+- Leveraged INVERSE ETFs (SOXS/SQQQ/UVXY) cannot be bought in a BULL regime — fading an
+  up-trending tape with a decaying −3x inverse, then swing-holding it, lost −$1,670 at a 0%
+  win rate (SOXS −$1,608 held ~4 days). Inverse ETFs are downside trades: NEUTRAL/BEAR/PANIC
+  only, and never swing-held multi-day (volatility decay). (code-enforced; mirror of the
+  leveraged-long rule above)
 - Daily drawdown soft/hard stops are **code-enforced** whenever `risk.disable_daily_stops_in_paper=false`
   (the current setting) — including on paper. At the soft threshold new buys are blocked; at the hard
   threshold the book goes reduce-only. Set `disable_daily_stops_in_paper=true` to make them advisory on
