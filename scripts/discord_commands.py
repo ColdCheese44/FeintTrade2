@@ -472,6 +472,7 @@ def cmd_help():
         "`!tests` — run the test suite + post ✅/❌ per test to #ft-dev-log\n"
         "`!intel` — decision-intelligence audit (what the agent gets right/wrong)\n"
         "`!council <SYM>` — multi-agent analyst second opinion (advisory)\n"
+        "`!quote <SYM>` — free public-API price (crypto) + USD-strength macro\n"
         "`!help` — this message"
     )
 
@@ -676,6 +677,28 @@ def cmd_council(*args):
         return f"❌ Council failed: {e}"
 
 
+def cmd_quote(*args):
+    """Free public-API price (crypto via Coinbase/CoinGecko) + the USD-strength macro signal."""
+    if not args:
+        return "Usage: `!quote <SYM>` — e.g. `!quote BTC/USD` (free crypto price + USD-strength macro)."
+    sym = args[0].upper()
+    try:
+        import public_data
+        out = []
+        p = public_data.crypto_price(sym)
+        if p:
+            out.append(f"💰 **{sym}**: ${p:,.4f}".rstrip("0").rstrip("."))
+        else:
+            out.append(f"❓ No free price for **{sym}** — free no-key equity feeds are geo-blocked "
+                       "here, so equities stay on Alpaca/yfinance. Try a crypto symbol like BTC/USD.")
+        mb = public_data.macro_brief()
+        if mb:
+            out.append(f"🌎 {mb}")
+        return "\n".join(out)
+    except Exception as e:
+        return f"❌ Quote failed: {e}"
+
+
 # No-arg commands
 COMMANDS = {
     "!status":     cmd_status,
@@ -709,6 +732,7 @@ ARG_COMMANDS = {
     "!ask":     cmd_ask,
     "!explain": cmd_ask,
     "!council": cmd_council,
+    "!quote":   cmd_quote,
 }
 
 

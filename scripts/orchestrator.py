@@ -890,6 +890,15 @@ def _load_context() -> dict:
     except Exception:
         ctx["market_research_brief"] = ""
 
+    # Free USD-strength macro signal (Frankfurter/ECB FX via public_data) — risk-on/off context.
+    try:
+        import public_data
+        _mb = public_data.macro_brief()
+        if _mb:
+            ctx["performance_brief"] = (ctx.get("performance_brief") or "") + "\n" + _mb
+    except Exception:
+        pass
+
     # Weekday options chain — only on trading weekdays, only when options are enabled, and
     # only during/near equity hours (options can't trade when the market is closed). Lives
     # in its own ctx key so it's injected into the EQUITY decision prompts (research /
