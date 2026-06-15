@@ -5,6 +5,7 @@ journal/*.md
 logs/
 data/
 reports/
+backups/
 agent.log
 bot.pid
 kill.flag

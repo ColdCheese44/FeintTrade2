@@ -11,7 +11,10 @@
 #    11:30  Diagnostic (midday)           every day
 #    14:15  End of Day + detailed report  Mon-Fri   (REPORT 2/3)
 #    18:15  After-hours wrap + report     Mon-Fri   (REPORT 3/3)
-#    hourly Crypto cycle                  every day (24/7)
+#    every 2h  Crypto cycle               every day (24/7, bi-hourly)
+#    every 2h  Market Research synthesis  every day (24/7, bi-hourly)
+#    06:30  Weekly Review                 Monday    intel + strategy lab + benchmark
+#    02:00  Nightly State Backup          every day data/ + journal/ -> backups/
 #    boot   Discord bot (auto-restart)    starts at STARTUP, headless
 #
 #  The flow is research -> synthesis(journal) -> decisions, by design.
@@ -132,12 +135,25 @@ $crypto.Repetition = (New-ScheduledTaskTrigger -Once -At 12:00AM `
     -RepetitionDuration (New-TimeSpan -Hours 24)).Repetition
 Register-MhTask "Trading - Crypto Hourly" "run_crypto.bat" $crypto "24/7 bi-hourly crypto scored cycle (every 2h)"
 
-# hourly, 24/7 — free-source market research synthesis (continuous strategy refinement)
+# every 2 hours, 24/7 — free-source market research synthesis (continuous strategy
+# refinement). Bi-hourly (was hourly) to match the crypto cadence and halve the Sonnet
+# spend — macro/strategy bias does not move fast enough to need an hourly refresh.
 $research = New-ScheduledTaskTrigger -Daily -At 12:10AM
 $research.Repetition = (New-ScheduledTaskTrigger -Once -At 12:10AM `
-    -RepetitionInterval (New-TimeSpan -Hours 1) `
+    -RepetitionInterval (New-TimeSpan -Hours 2) `
     -RepetitionDuration (New-TimeSpan -Hours 24)).Repetition
-Register-MhTask "Trading - Market Research" "run_market_research.bat" $research "24/7 hourly free-source market research synthesis"
+Register-MhTask "Trading - Market Research" "run_market_research.bat" $research "24/7 bi-hourly free-source market research synthesis (every 2h)"
+
+# 06:30 Monday — weekly review (intel audit + strategy lab + benchmark vs baselines).
+# The SOP mandates a Monday weekly review; these read-only analytics are otherwise
+# on-demand only (!intel/!lab/!benchmark). Posts to Discord; never trades.
+Register-MhTask "Trading - Weekly Review" "run_weekly_review.bat" `
+    (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 6:30AM) "Weekly review: intel audit + strategy lab + benchmark vs baselines"
+
+# 02:00 daily — nightly state backup. Zips data/ + journal/ (the local-only, gitignored
+# trade log + learning history) to backups/ and keeps the most recent 14. Zero API cost.
+Register-MhTask "Trading - State Backup" "run_backup.bat" `
+    (New-ScheduledTaskTrigger -Daily -At 2:00AM) "Nightly backup of data/ + journal/ to backups/ (keep 14)"
 
 # at STARTUP + logon — Discord bot (its .bat auto-restarts; no execution time limit).
 # AtStartup brings it up headless on boot before anyone signs in; AtLogon is a

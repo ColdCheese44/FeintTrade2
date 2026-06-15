@@ -533,7 +533,9 @@ Registered by `register_all_tasks.ps1`. The flow is **research → synthesis (jo
 | 2:15 PM | End of Day + detailed report (SWING — no forced flatten) | run_eod.bat → eod |
 | 6:15 PM | After-hours wrap + detailed report | run_afterhours.bat → afterhours |
 | Every 2h, 24/7 | Crypto Cycle (bi-hourly as of 2026-06-15) | run_crypto.bat → crypto |
-| Hourly, 24/7 | Market Research (free-source synthesis → strategy bias) | run_market_research.bat → market_research.py |
+| Every 2h, 24/7 | Market Research (free-source synthesis → strategy bias) | run_market_research.bat → market_research.py |
+| 6:30 AM Monday | Weekly Review (intel audit + strategy lab + benchmark → Discord) | run_weekly_review.bat → weekly_review.py |
+| 2:00 AM daily | Nightly State Backup (data/ + journal/ → backups/, keep 14) | run_backup.bat → backup_state.py |
 | At logon | Discord bot (`!heartbeat` runs a full cycle) | run_bot.bat |
 
 Both the EOD (2:15 PM) and after-hours (6:15 PM) routines post a **detailed, exportable report**
