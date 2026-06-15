@@ -470,6 +470,7 @@ def cmd_help():
         "`!usage` — today's API cost breakdown\n"
         "`!cost` — Anthropic API spend (month / projected / budget)\n"
         "`!tests` — run the test suite + post ✅/❌ per test to #ft-dev-log\n"
+        "`!intel` — decision-intelligence audit (what the agent gets right/wrong)\n"
         "`!help` — this message"
     )
 
@@ -632,6 +633,26 @@ def cmd_tests():
         return f"❌ Test run failed: {e}"
 
 
+def cmd_intel():
+    """Decision-intelligence audit — what the agent keeps getting right/wrong (read-only)."""
+    try:
+        import intel_audit
+        a = intel_audit.audit()
+        intel_audit.post()   # full report → #ft-reports
+        lines = ["🧠 **Decision-Intelligence Audit** — full report posted to #ft-reports."]
+        ba = a.get("by_action") or []
+        if ba:
+            lines.append("Return by action: " + " · ".join(
+                f"{act} {st.get('avg_primary_return_pct', 0):+.1f}%" for act, st in ba[:5]))
+        over = [r for r in (a.get("blocker_predictiveness") or []) if r["verdict"].startswith("🔴")]
+        if over:
+            lines.append("⚠️ Over-restrictive blockers to review: " + ", ".join(
+                f"{r['blocker']} ({r['avg_return_pct']:+.1f}%)" for r in over[:4]))
+        return "\n".join(lines)
+    except Exception as e:
+        return f"❌ Intel audit failed: {e}"
+
+
 # No-arg commands
 COMMANDS = {
     "!status":     cmd_status,
@@ -651,6 +672,7 @@ COMMANDS = {
     "!benchmark":  cmd_benchmark,
     "!cost":       cmd_cost,
     "!tests":      cmd_tests,
+    "!intel":      cmd_intel,
     "!help":       cmd_help,
     # !heartbeat is handled directly in bot.py (async, long-running)
 }

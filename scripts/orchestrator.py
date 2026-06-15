@@ -2734,6 +2734,12 @@ Return only these new sections."""
         replay.post_report()
     except Exception as e:
         log.warning(f"Benchmark report failed: {e}")
+    # Decision-intelligence audit (what the agent gets right/wrong) -> #ft-reports
+    try:
+        import intel_audit
+        intel_audit.post()
+    except Exception as e:
+        log.warning(f"Intel audit failed: {e}")
     # Detailed, exportable end-of-day report -> Discord (embed + attached .md)
     if session_report:
         try:
