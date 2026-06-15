@@ -471,6 +471,7 @@ def cmd_help():
         "`!cost` — Anthropic API spend (month / projected / budget)\n"
         "`!tests` — run the test suite + post ✅/❌ per test to #ft-dev-log\n"
         "`!intel` — decision-intelligence audit (what the agent gets right/wrong)\n"
+        "`!lab` — strategy lab: what-if recommendations to make the book profitable\n"
         "`!council <SYM>` — multi-agent analyst second opinion (advisory)\n"
         "`!quote <SYM>` — free public-API price (crypto) + USD-strength macro\n"
         "`!help` — this message"
@@ -655,6 +656,18 @@ def cmd_intel():
         return f"❌ Intel audit failed: {e}"
 
 
+def cmd_lab():
+    """Strategy Lab — evidence-based what-if recommendations to make the book profitable."""
+    try:
+        import strategy_lab
+        rows = strategy_lab.join_rows()
+        strategy_lab.post()
+        return ("🧪 **Strategy Lab** — full report posted to #ft-reports.\n"
+                + "\n".join(f"• {r}" for r in strategy_lab.recommendations(rows)[:5]))
+    except Exception as e:
+        return f"❌ Strategy Lab failed: {e}"
+
+
 def cmd_council(*args):
     """Convene the analyst council on a symbol — multi-agent second opinion (advisory)."""
     if not args:
@@ -719,6 +732,7 @@ COMMANDS = {
     "!cost":       cmd_cost,
     "!tests":      cmd_tests,
     "!intel":      cmd_intel,
+    "!lab":        cmd_lab,
     "!help":       cmd_help,
     # !heartbeat is handled directly in bot.py (async, long-running)
 }

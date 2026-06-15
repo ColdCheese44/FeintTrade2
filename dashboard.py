@@ -1734,6 +1734,15 @@ def _intel_audit_data():
         return None
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _strategy_lab_recs():
+    try:
+        import strategy_lab
+        return strategy_lab.recommendations()
+    except Exception:
+        return []
+
+
 def _read_state_json(rel):
     try:
         return json.loads((ROOT / rel).read_text(encoding="utf-8"))
@@ -1814,6 +1823,17 @@ with tab_ops:
             st.caption(f"• {_ln}")
     else:
         st.caption("Decision-intelligence summary not available yet (intelligence.py builds it).")
+
+    # ── 🧪 Strategy Lab — what-if recommendations to make the book profitable ──
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    with st.expander("🧪 Strategy Lab — evidence-based what-if recommendations", expanded=True):
+        _recs = _strategy_lab_recs()
+        if _recs:
+            for _r in _recs:
+                st.markdown(f"- {_r}")
+            st.caption("Read-only — apply changes manually after review. Run `!lab` in Discord for the full report.")
+        else:
+            st.caption("Not enough evaluated decisions yet.")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
