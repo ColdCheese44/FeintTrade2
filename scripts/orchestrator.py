@@ -667,6 +667,12 @@ def get_positions_norm():
     pos = safe_run("research.py", "positions")
     return normalize_positions(pos) if isinstance(pos, list) else []
 
+# Routines that post a !status snapshot to #ft-command-post when they finish (every
+# cycle/trade/research/etc.). Utility routines (report/usage/validate-models) are excluded.
+_STATUS_ROUTINES = {"research", "trading", "intraday", "cycle",
+                    "eod", "afterhours", "marketopen", "crypto"}
+
+
 def _notify(fn_name, *args, **kwargs):
     if dn:
         try:
@@ -3150,6 +3156,11 @@ if __name__ == "__main__":
             sys.exit(1)
         if _activity and routine:
             _activity.log("routine_done", routine)
+        # Post the !status snapshot to #ft-command-post after every trading routine, so the
+        # channel is a live pulse (equity / day P&L / cash / positions) of the book on every
+        # cycle/trade/research. Best-effort — never fails the routine.
+        if routine in _STATUS_ROUTINES:
+            _notify("status_update", routine)
     except Exception as e:
         log.exception(f"Routine '{routine}' failed: {e}")
         _notify("dev_log", f"Routine '{routine}' failed: {e}", "error")

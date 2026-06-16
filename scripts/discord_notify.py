@@ -7,6 +7,7 @@ layer). When multichannel is disabled or the bot token is absent, discord_channe
 falls back to the single DISCORD_WEBHOOK_URL, preserving the original behavior.
 """
 
+import json
 import os
 import time
 import requests
@@ -14,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent.parent / ".env", override=True)
+_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_ROOT / ".env", override=True)
 
 try:
     import discord_channels as dch
@@ -57,6 +59,39 @@ def _portfolio_pnl():
         return val
     except Exception:
         return _pnl_cache["val"]
+
+
+_acct_cache = {"ts": 0.0, "val": None}
+_pos_cache  = {"ts": 0.0, "val": None}
+_HEADERS_RO = {"APCA-API-KEY-ID": _ALPACA_KEY, "APCA-API-SECRET-KEY": _ALPACA_SECRET}
+
+
+def _fetch_account():
+    """Full Alpaca account dict, cached ~20s. {} on failure."""
+    now = time.time()
+    if _acct_cache["val"] is not None and now - _acct_cache["ts"] < 20:
+        return _acct_cache["val"]
+    try:
+        r = requests.get(f"{_BASE_URL}/v2/account", headers=_HEADERS_RO, timeout=8)
+        r.raise_for_status()
+        _acct_cache.update(ts=now, val=r.json())
+        return _acct_cache["val"]
+    except Exception:
+        return _acct_cache["val"] or {}
+
+
+def _fetch_positions():
+    """Live Alpaca positions list, cached ~20s. [] on failure."""
+    now = time.time()
+    if _pos_cache["val"] is not None and now - _pos_cache["ts"] < 20:
+        return _pos_cache["val"]
+    try:
+        r = requests.get(f"{_BASE_URL}/v2/positions", headers=_HEADERS_RO, timeout=8)
+        r.raise_for_status()
+        _pos_cache.update(ts=now, val=r.json())
+        return _pos_cache["val"]
+    except Exception:
+        return _pos_cache["val"] or []
 
 
 def _pnl_field():
@@ -486,6 +521,67 @@ def eod_summary(account, positions, day_pnl):
 
 def alert(message, color=ORANGE):
     send(title="⚠️ Agent Alert", description=message, color=color, msg_type="alert")
+
+
+def _status_updates_enabled() -> bool:
+    """Config gate: discord.command_post_status_updates (default True). Lets the operator
+    silence the per-cycle status feed without a code change."""
+    try:
+        cfg = json.loads((_ROOT / "watchlist.json").read_text(encoding="utf-8"))
+        return bool((cfg.get("discord") or {}).get("command_post_status_updates", True))
+    except Exception:
+        return True
+
+
+def status_update(routine, account=None, positions=None, note=""):
+    """
+    Post the `!status` snapshot — portfolio equity, day P&L, cash, open positions, and
+    market/kill state — to #ft-command-post after a routine/cycle/trade so the channel is a
+    live pulse of the book. Pass account/positions if the caller already has them to skip an
+    Alpaca round-trip; otherwise they're fetched (cached ~20s). Gated by
+    discord.command_post_status_updates.
+    """
+    if not _status_updates_enabled():
+        return
+    account = account if isinstance(account, dict) and account else _fetch_account()
+    positions = positions if isinstance(positions, list) else _fetch_positions()
+
+    equity  = float((account or {}).get("equity", 0) or 0)
+    cash    = float((account or {}).get("cash", 0) or 0)
+    last_eq = float((account or {}).get("last_equity", equity) or equity)
+    day_pnl = equity - last_eq
+    day_pct = (day_pnl / last_eq * 100) if last_eq else 0.0
+    n_pos   = len(positions) if isinstance(positions, list) else 0
+
+    killed = (_ROOT / "kill.flag").exists()
+    try:
+        from common import market_phase
+        phase = market_phase()
+    except Exception:
+        phase = ""
+    if killed:
+        state = "🛑 KILL SWITCH ACTIVE — trading halted"
+    elif phase == "REGULAR":
+        state = "🟢 Market Open"
+    elif phase in ("PRE_MARKET", "AFTER_HOURS"):
+        state = f"🟡 {phase.replace('_', ' ').title()} · crypto 24/7"
+    else:
+        state = "🔴 Market Closed · crypto 24/7"
+
+    color = RED if killed else (GREEN if day_pnl >= 0 else ORANGE)
+    fields = [
+        {"name": "💰 Portfolio",      "value": f"${equity:,.2f}",                       "inline": True},
+        {"name": "📊 Day P&L",        "value": f"${day_pnl:+,.2f} ({day_pct:+.2f}%)",   "inline": True},
+        {"name": "💵 Cash",           "value": f"${cash:,.2f}",                         "inline": True},
+        {"name": "📋 Open Positions", "value": str(n_pos),                              "inline": True},
+    ]
+    send(
+        msg_type="status_update",
+        title=f"📟 Status · {routine}",
+        description=(state + (f"\n{note}" if note else "")),
+        color=color,
+        fields=fields,
+    )
 
 
 # ---------------------------------------------------------------------------

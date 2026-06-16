@@ -127,9 +127,11 @@
   "discord": {
     "note": "10-channel operator routing ported from FeintTrade. Channel IDs live in .env (DISCORD_CH_*); posting uses DISCORD_BOT_TOKEN via the bot API and falls back to command_post then the DISCORD_WEBHOOK_URL. Severity cooldowns + dedup prevent alert spam; trades/proposals are INFO (cooldown 0) so they always post. Set multichannel_enabled=false to revert to single-webhook behavior.",
     "multichannel_enabled": true,
+    "command_post_status_updates": true,
     "routing": {
       "heartbeat": "command_post",
       "market_summary": "command_post",
+      "status_update": "command_post",
       "proposal": "signals",
       "approval_card": "approvals",
       "trade": "trade_log",

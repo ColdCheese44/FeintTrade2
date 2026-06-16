@@ -567,7 +567,7 @@ agent decides/does; they never gate execution (FeintTrade stays autonomous).**
 
 | Channel | Receives |
 |---------|----------|
-| `ft-command-post` | heartbeats, market/regime summary |
+| `ft-command-post` | heartbeats, market/regime summary, per-routine `!status` snapshot (equity / day P&L / cash / positions) after every cycle/trade/research — toggle via `discord.command_post_status_updates` |
 | `ft-signals` | trade proposals, marketwide-discovery scan |
 | `ft-approvals` | decision cards (notify-only; auto-executes) |
 | `ft-trade-log` | placed orders, executed decisions, take-profits |
