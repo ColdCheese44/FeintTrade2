@@ -129,26 +129,59 @@ def heartbeat(routine, status="ok", notes=""):
     send(
         msg_type="heartbeat",
         title=f"{icon} Heartbeat — {routine}",
-        description=notes or f"{routine} completed at {datetime.now().strftime('%H:%M MT')}",
+        description=(notes or f"{routine} completed at {datetime.now().strftime('%H:%M MT')}")
+                    + ("" if status == "ok" else "\n⚠️ Status not OK — check #ft-dev-log."),
         color=color,
+        fields=_with_pnl(None),   # show live equity + day/all-time P&L at a glance
     )
 
 
 def trade_placed(order, result):
-    side  = order.get("side", "").upper()
+    side  = str(order.get("side", "")).upper()
     color = GREEN if side == "BUY" else RED
     icon  = "🟢" if side == "BUY" else "🔴"
+    sym   = order.get("symbol", "?")
+    px    = order.get("limit_price")
+    setup = order.get("setup_type") or "—"
+    conv  = order.get("conviction", order.get("score"))
+    sig   = (order.get("signals") or {}).get("signal_count")
+
+    fields = [
+        {"name": "Setup",  "value": str(setup),                         "inline": True},
+        {"name": "Status", "value": result.get("status", "submitted"),  "inline": True},
+    ]
+    quality = []
+    if conv not in (None, ""):
+        quality.append(f"conviction {conv}/10")
+    if sig not in (None, ""):
+        quality.append(f"{sig} signals")
+    if quality:
+        fields.insert(1, {"name": "Quality", "value": " · ".join(quality), "inline": True})
+
+    # Risk plan (stop / target / R:R) when the model supplied it — the most important
+    # numbers on a trade post: where we're wrong and what we're playing for.
+    stop   = order.get("stop") or order.get("stop_price")
+    target = order.get("target") or order.get("target_price")
+    if stop or target:
+        rp = []
+        if stop:
+            rp.append(f"🛑 stop {_fmt_price(stop)}")
+        if target:
+            rp.append(f"🎯 target {_fmt_price(target)}")
+        try:
+            if stop and target and px:
+                rr = abs(float(target) - float(px)) / abs(float(px) - float(stop))
+                rp.append(f"R:R {rr:.1f}:1")
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+        fields.append({"name": "Risk plan", "value": "  ·  ".join(rp), "inline": False})
+
     send(
         msg_type="trade",
-        title=f"{icon} Order Placed — {order.get('symbol')}",
-        description=order.get("reasoning", "")[:800],
+        title=f"{icon} {side} {order.get('qty')} {sym} @ {_fmt_price(px)}"[:240],
+        description=(order.get("reasoning") or "")[:700],
         color=color,
-        fields=_with_pnl([
-            {"name": "Side",        "value": side,                          "inline": True},
-            {"name": "Qty",         "value": str(order.get("qty")),          "inline": True},
-            {"name": "Limit Price", "value": f"${order.get('limit_price')}", "inline": True},
-            {"name": "Status",      "value": result.get("status", "submitted"), "inline": True},
-        ]),
+        fields=_with_pnl(fields),
     )
 
 
@@ -348,33 +381,39 @@ def decision_executed(routine, payload, orders_placed=None, closes_placed=None,
     )
 
 
+def _exit_fields(position):
+    qty = abs(float(position.get("qty", 0) or 0))
+    return [
+        {"name": "Entry",   "value": f"${float(position.get('avg_entry_price', 0) or 0):,.2f}", "inline": True},
+        {"name": "Current", "value": f"${float(position.get('current_price', 0) or 0):,.2f}",   "inline": True},
+        {"name": "Qty",     "value": f"{qty:g}",                                                 "inline": True},
+        {"name": "Realized P&L", "value": f"${float(position.get('unrealized_pl', 0) or 0):+,.2f}", "inline": True},
+    ]
+
+
 def stop_loss_alert(symbol, pnl_pct, position):
+    pl = float(position.get("unrealized_pl", 0) or 0)
     send(
         msg_type="stop_loss",
         dedup_key=f"stop_loss:{symbol}",
-        title=f"⚠️ Stop-Loss Triggered — {symbol}",
-        description=f"Position down **{pnl_pct:.1f}%** from entry. Closing position.",
+        title=f"🛑 Stop-Loss — {symbol} {pnl_pct:+.1f}% (${pl:+,.0f})",
+        description=(f"**{symbol}** hit its stop at **{pnl_pct:+.1f}%** (**${pl:+,.2f}**) — closing the position. "
+                     "Cutting losers fast is how the account survives; the first loss is the cheapest one."),
         color=RED,
-        fields=_with_pnl([
-            {"name": "Entry",   "value": f"${float(position.get('avg_entry_price', 0)):,.2f}", "inline": True},
-            {"name": "Current", "value": f"${float(position.get('current_price', 0)):,.2f}",   "inline": True},
-            {"name": "P&L",     "value": f"${float(position.get('unrealized_pl', 0)):+,.2f}",  "inline": True},
-        ]),
+        fields=_with_pnl(_exit_fields(position)),
     )
 
 
 def take_profit_alert(symbol, pnl_pct, position):
+    pl = float(position.get("unrealized_pl", 0) or 0)
     send(
         msg_type="take_profit",
         dedup_key=f"take_profit:{symbol}",
-        title=f"✅ Profit Target — {symbol}",
-        description=f"Position up **{pnl_pct:+.1f}%** from entry. Taking profit / closing.",
+        title=f"✅ Take-Profit — {symbol} {pnl_pct:+.1f}% (${pl:+,.0f})",
+        description=(f"**{symbol}** up **{pnl_pct:+.1f}%** (**${pl:+,.2f}**) — banking the gain / trimming. "
+                     "You never go broke taking profits; the runner stays on a trailed stop."),
         color=GREEN,
-        fields=_with_pnl([
-            {"name": "Entry",   "value": f"${float(position.get('avg_entry_price', 0)):,.2f}", "inline": True},
-            {"name": "Current", "value": f"${float(position.get('current_price', 0)):,.2f}",   "inline": True},
-            {"name": "P&L",     "value": f"${float(position.get('unrealized_pl', 0)):+,.2f}",  "inline": True},
-        ]),
+        fields=_with_pnl(_exit_fields(position)),
     )
 
 
@@ -397,20 +436,51 @@ def kill_deactivated():
 
 
 def eod_summary(account, positions, day_pnl):
-    equity = float(account.get("equity", 0))
-    cash   = float(account.get("cash", 0))
+    equity = float(account.get("equity", 0) or 0)
+    cash   = float(account.get("cash", 0) or 0)
+    invested = equity - cash
+    last_eq = equity - day_pnl
+    day_pct = (day_pnl / last_eq * 100) if last_eq else 0.0
+    positions = positions if isinstance(positions, list) else []
+    n = len(positions)
     color  = GREEN if day_pnl >= 0 else RED
     icon   = "📈" if day_pnl >= 0 else "📉"
+
+    def _plpc(p):
+        try:
+            return float(p.get("unrealized_plpc", 0) or 0) * 100
+        except (TypeError, ValueError):
+            return 0.0
+
+    greens = [p for p in positions if _plpc(p) >= 0]
+    reds   = [p for p in positions if _plpc(p) < 0]
+
+    fields = [
+        {"name": "Portfolio", "value": f"${equity:,.2f}", "inline": True},
+        {"name": "Cash",      "value": (f"${cash:,.2f} ({cash/equity*100:.0f}%)" if equity else f"${cash:,.2f}"),
+         "inline": True},
+        {"name": "Invested",  "value": f"${invested:,.2f}", "inline": True},
+    ]
+    if positions:
+        fields.append({"name": f"Open Positions ({n})",
+                       "value": f"🟢 {len(greens)} up · 🔴 {len(reds)} down", "inline": False})
+        best  = max(positions, key=_plpc)
+        worst = min(positions, key=_plpc)
+        fields.append({"name": "Best / Worst (open)",
+                       "value": (f"🟢 {best.get('symbol', '?')} {_plpc(best):+.1f}%"
+                                 f"   ·   🔴 {worst.get('symbol', '?')} {_plpc(worst):+.1f}%"),
+                       "inline": False})
+    else:
+        fields.append({"name": "Open Positions",
+                       "value": "None — sitting in cash (a valid, disciplined decision).", "inline": False})
+
     send(
         msg_type="status",
-        title=f"{icon} End of Day Summary",
-        description=f"Day P&L: **${day_pnl:+,.2f}**",
+        title=f"{icon} End of Day — {'+' if day_pnl >= 0 else '−'}${abs(day_pnl):,.2f} ({day_pct:+.2f}%)",
+        description=(f"Closed the session **{'up' if day_pnl >= 0 else 'down'} ${abs(day_pnl):,.2f}** "
+                     f"({day_pct:+.2f}%). Full report in #ft-reports."),
         color=color,
-        fields=[
-            {"name": "Portfolio Value", "value": f"${equity:,.2f}",         "inline": True},
-            {"name": "Cash",            "value": f"${cash:,.2f}",            "inline": True},
-            {"name": "Open Positions",  "value": str(len(positions) if isinstance(positions, list) else 0), "inline": True},
-        ],
+        fields=fields,
     )
 
 
