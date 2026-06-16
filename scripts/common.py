@@ -28,15 +28,33 @@ except Exception:
 ROOT = Path(__file__).parent.parent
 
 
-def make_http_session(total: int = 4, backoff: float = 0.5) -> requests.Session:
+class _TimeoutSession(requests.Session):
+    """A Session that applies a DEFAULT timeout to any request that doesn't pass one,
+    so a forgotten `timeout=` can never hang a caller indefinitely (the dashboard had
+    several timeout-less calls that could block the whole page on a slow socket). An
+    explicit `timeout=` always wins."""
+
+    def __init__(self, default_timeout: float = 15):
+        super().__init__()
+        self._default_timeout = default_timeout
+
+    def request(self, *args, **kwargs):  # noqa: D102
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self._default_timeout
+        return super().request(*args, **kwargs)
+
+
+def make_http_session(total: int = 4, backoff: float = 0.5,
+                      default_timeout: float = 15) -> requests.Session:
     """
     A requests.Session that rides out transient DNS/connection blips (e.g. a VPN
     tunnel reconnecting) by retrying with exponential backoff. Only IDEMPOTENT
     methods are retried (urllib3 default: GET/HEAD/DELETE/etc.) — POST is NOT, so
-    order placement can never be double-submitted by a retry. Falls back to a
-    plain session if urllib3's Retry is unavailable.
+    order placement can never be double-submitted by a retry. Every request also gets
+    a default timeout (override per-call with `timeout=`). Falls back to a plain
+    session if urllib3's Retry is unavailable.
     """
-    session = requests.Session()
+    session = _TimeoutSession(default_timeout=default_timeout)
     if Retry is not None:
         retry = Retry(
             total=total, connect=total, read=total, status=total,

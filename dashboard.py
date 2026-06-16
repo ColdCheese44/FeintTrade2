@@ -482,8 +482,12 @@ def get_market_movers():
                     chg = (float(lp) - float(op)) / float(op) * 100
                     moves.append({"sym": sym, "price": float(lp), "chg_pct": round(chg, 2), "volume": vol})
             moves.sort(key=lambda x: x["chg_pct"], reverse=True)
-            gainers = moves[:5]
-            losers  = list(reversed(moves[-5:]))
+            # Split so gainers and losers never overlap when there are < 10 movers
+            # (moves[:5] and moves[-5:] used to share rows, showing the same symbol as
+            # both a top gainer AND a top loser). Only positive moves can be gainers and
+            # only negative moves losers.
+            gainers = [m for m in moves if m["chg_pct"] > 0][:5]
+            losers  = list(reversed([m for m in moves if m["chg_pct"] < 0]))[:5]
     except Exception:
         pass
     return gainers, losers
@@ -939,7 +943,7 @@ def _countdown_html():
         h, m = divmod(mins, 60)
         label = "● MARKET OPEN"
         color = "#00d4aa"
-        sub = f"{h}h {m:02d}m to close (2:00 PM) · equity flatten 1:45 PM"
+        sub = f"{h}h {m:02d}m to close (2:00 PM) · SWING: positions held overnight"
     elif phase == "PRE_MARKET":
         open_dt = n.replace(hour=7, minute=30, second=0, microsecond=0)
         mins = max(0, int((open_dt - n).total_seconds() // 60)); h, m = divmod(mins, 60)
@@ -1008,6 +1012,38 @@ def _today_cost_badge():
         return ""
 
 
+@st.cache_data(ttl=20)
+def _agent_health_badge():
+    """Liveness badge for the autonomous agent: heartbeat note + a 24/7 freshness pulse
+    (heartbeat.json plus agent-written log/decision mtimes, none of which the dashboard
+    touches), so you can see at a glance whether the scheduled routines are still firing."""
+    try:
+        from dashboard_helpers import agent_health
+        hb = {}
+        hbp = ROOT / "heartbeat.json"
+        if hbp.exists():
+            try:
+                hb = json.loads(hbp.read_text(encoding="utf-8"))
+            except Exception:
+                hb = {}
+        mtimes = []
+        for rel in ("heartbeat.json", "data/decision_log.jsonl",
+                    "logs/crypto.log", "logs/intraday.log"):
+            p = ROOT / rel
+            if p.exists():
+                mtimes.append(p.stat().st_mtime)
+        h = agent_health(hb, last_activity_ts=max(mtimes) if mtimes else None)
+        return (
+            f'<span title="Last agent activity: {h["notes"]} · status {h["status"]} · {h["age"]} ago" '
+            f'style="background:#0d1117;border:1px solid {h["color"]}55;color:{h["color"]};'
+            f'font-size:0.62rem;font-weight:700;letter-spacing:0.05em;padding:2px 8px;'
+            f'border-radius:20px;margin-left:8px;cursor:help">'
+            f'{h["dot"]} AGENT {h["label"].upper()} · {h["age"]}</span>'
+        )
+    except Exception:
+        return ""
+
+
 def render_header():
     n = now_mt()
     tz = mt_tz_label()
@@ -1016,6 +1052,7 @@ def render_header():
     date_str = n.strftime("%A, %B %d %Y")
     vm_badge = _validation_badge()
     cost_badge = _today_cost_badge()
+    health_badge = _agent_health_badge()
 
     st.markdown(f"""
 <div style="display:flex;align-items:center;justify-content:space-between;
@@ -1024,7 +1061,7 @@ def render_header():
     <span style="color:#f1f5f9;font-size:1.5rem;font-weight:800;letter-spacing:-0.01em">⚡ FEINTTRADE</span>
     <span style="color:#00d4aa;font-size:1.5rem;font-weight:300;margin-left:4px">TRADER</span>
     <span style="color:#334155;font-size:0.7rem;margin-left:12px;font-family:'JetBrains Mono',monospace">PAPER</span>
-    {vm_badge}{cost_badge}
+    {vm_badge}{cost_badge}{health_badge}
   </div>
   <div style="text-align:right">
     <div><span style="color:{color};font-weight:700;font-size:0.9rem">{label}</span></div>
@@ -1401,11 +1438,14 @@ with c_ai:
         st.rerun()
 
 # ── Fetch once for all tabs ──
+account = get_account()
+# Degraded state: an empty dict means the account fetch failed (transient VPN/DNS blip).
+# Without this guard the page rendered a scary, false "$0.00 portfolio / -100% total P&L".
+account_degraded = not isinstance(account, dict) or not account
 try:
-    account  = get_account()
-    equity   = float(account.get("equity", 0))
-    cash     = float(account.get("cash", 0))
-    last_eq  = float(account.get("last_equity", equity))
+    equity   = float(account.get("equity", 0) or 0)
+    cash     = float(account.get("cash", 0) or 0)
+    last_eq  = float(account.get("last_equity", equity) or equity)
     invested = equity - cash
     day_pnl  = equity - last_eq
     day_pnl_pct = (day_pnl / last_eq * 100) if last_eq else 0
@@ -1414,7 +1454,12 @@ try:
     total_pnl_pct = total_pnl / start_eq * 100
 except Exception:
     account = {}
+    account_degraded = True
     equity = cash = last_eq = invested = day_pnl = day_pnl_pct = total_pnl = total_pnl_pct = 0
+
+if account_degraded:
+    st.warning("⚠️ Account data temporarily unavailable (transient Alpaca/VPN blip). "
+               "Showing placeholders — values refresh automatically. Trading is unaffected.")
 
 try:
     positions = get_positions()
@@ -1433,12 +1478,19 @@ render_vibe_bar(account)
 
 # ── Portfolio metric strip ──
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Portfolio", f"${equity:,.2f}", f"{day_pnl:+,.2f}")
-m2.metric("Cash", f"${cash:,.2f}", f"{cash/equity*100:.1f}% avail" if equity else "—")
-m3.metric("Invested", f"${invested:,.2f}", f"{invested/equity*100:.1f}%" if equity else "—")
-m4.metric("Day P&L", f"${day_pnl:+,.2f}", f"{day_pnl_pct:+.2f}%")
-m5.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}% vs start")
-m6.metric("Open Positions", str(len(positions)), f"{len(positions)} active")
+if account_degraded:
+    # Don't render misleading $0 / -100% figures when the account fetch failed.
+    for col, lbl in ((m1, "Portfolio"), (m2, "Cash"), (m3, "Invested"),
+                     (m4, "Day P&L"), (m5, "Total P&L")):
+        col.metric(lbl, "—", "unavailable")
+    m6.metric("Open Positions", str(len(positions)), f"{len(positions)} active")
+else:
+    m1.metric("Portfolio", f"${equity:,.2f}", f"{day_pnl:+,.2f}")
+    m2.metric("Cash", f"${cash:,.2f}", f"{cash/equity*100:.1f}% avail" if equity else "—")
+    m3.metric("Invested", f"${invested:,.2f}", f"{invested/equity*100:.1f}%" if equity else "—")
+    m4.metric("Day P&L", f"${day_pnl:+,.2f}", f"{day_pnl_pct:+.2f}%")
+    m5.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}% vs start")
+    m6.metric("Open Positions", str(len(positions)), f"{len(positions)} active")
 
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 

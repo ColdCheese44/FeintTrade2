@@ -11,7 +11,7 @@
 #    11:30  Diagnostic (midday)           every day
 #    14:15  End of Day + detailed report  Mon-Fri   (REPORT 2/3)
 #    18:15  After-hours wrap + report     Mon-Fri   (REPORT 3/3)
-#    every 2h  Crypto cycle               every day (24/7, bi-hourly)
+#    every 30m Crypto cycle               every day (24/7)
 #    every 2h  Market Research synthesis  every day (24/7, bi-hourly)
 #    06:30  Weekly Review                 Monday    intel + strategy lab + benchmark
 #    02:00  Nightly State Backup          every day data/ + journal/ -> backups/
@@ -125,15 +125,15 @@ Register-MhTask "Trading - EOD" "run_eod.bat" `
 Register-MhTask "Trading - After Hours" "run_afterhours.bat" `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek $weekdays -At 6:15PM) "After-hours wrap + detailed Discord report"
 
-# every 2 hours, 24/7 — crypto cycle. Set to BI-HOURLY permanently on 2026-06-15; keep the
-# interval here in sync so re-running this registrar never reverts it to hourly. (Task name
-# stays "Trading - Crypto Hourly" to overwrite the existing task in place — renaming would
-# orphan the live one.)
+# every 30 minutes, 24/7 — crypto cycle. Set to 30-MIN permanently on 2026-06-15; keep the
+# interval here in sync so re-running this registrar never reverts it. (Task name stays
+# "Trading - Crypto Hourly" to overwrite the existing task in place — renaming would orphan
+# the live one.)
 $crypto = New-ScheduledTaskTrigger -Daily -At 12:00AM
 $crypto.Repetition = (New-ScheduledTaskTrigger -Once -At 12:00AM `
-    -RepetitionInterval (New-TimeSpan -Hours 2) `
+    -RepetitionInterval (New-TimeSpan -Minutes 30) `
     -RepetitionDuration (New-TimeSpan -Hours 24)).Repetition
-Register-MhTask "Trading - Crypto Hourly" "run_crypto.bat" $crypto "24/7 bi-hourly crypto scored cycle (every 2h)"
+Register-MhTask "Trading - Crypto Hourly" "run_crypto.bat" $crypto "24/7 crypto scored cycle (every 30 min)"
 
 # every 2 hours, 24/7 — free-source market research synthesis (continuous strategy
 # refinement). Bi-hourly (was hourly) to match the crypto cadence and halve the Sonnet

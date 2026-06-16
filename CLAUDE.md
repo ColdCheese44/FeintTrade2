@@ -375,7 +375,7 @@ Best instruments: BTC/USD, ETH/USD, NVDA, AMD
 
 ---
 
-### Strategy 9: Crypto Scored System (24/7, scored every cycle — bi-hourly)
+### Strategy 9: Crypto Scored System (24/7, scored every cycle — every 30 min)
 Every crypto cycle scores each symbol 1-10 using this rubric:
 
 | Signal | Points |
@@ -532,7 +532,7 @@ Registered by `register_all_tasks.ps1`. The flow is **research → synthesis (jo
 | Every 15 min (7:30–2:00) | Intraday Cycle (fresh data, stops, entries) | run_intraday.bat → cycle |
 | 2:15 PM | End of Day + detailed report (SWING — no forced flatten) | run_eod.bat → eod |
 | 6:15 PM | After-hours wrap + detailed report | run_afterhours.bat → afterhours |
-| Every 2h, 24/7 | Crypto Cycle (bi-hourly as of 2026-06-15) | run_crypto.bat → crypto |
+| Every 30 min, 24/7 | Crypto Cycle | run_crypto.bat → crypto |
 | Every 2h, 24/7 | Market Research (free-source synthesis → strategy bias) | run_market_research.bat → market_research.py |
 | 6:30 AM Monday | Weekly Review (intel audit + strategy lab + benchmark → Discord) | run_weekly_review.bat → weekly_review.py |
 | 2:00 AM daily | Nightly State Backup (data/ + journal/ → backups/, keep 14) | run_backup.bat → backup_state.py |
@@ -580,8 +580,8 @@ agent decides/does; they never gate execution (FeintTrade stays autonomous).**
 
 Config: channel IDs in `.env` (`DISCORD_CH_*`), routing/policy in `watchlist.json`
 `discord` block. Set `discord.multichannel_enabled=false` to revert to the single
-legacy webhook. The bot user ("TradeBot") must remain a member of the server holding
-these channels.
+legacy webhook. The bot user ("Stonks", formerly "TradeBot") must remain a member of the
+server holding these channels.
 
 ---
 
