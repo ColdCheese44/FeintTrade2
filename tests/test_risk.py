@@ -19,9 +19,6 @@ Covers:
 import sys
 import os
 from pathlib import Path
-import json
-import tempfile
-import shutil
 
 # Add scripts dir to path
 ROOT = Path(__file__).parent.parent
@@ -59,8 +56,8 @@ import common
 from common import (
     normalize_symbol, is_crypto, CORRELATED_CRYPTO_BASKETS,
     is_validation_mode, get_effective_caps, VALIDATION_MODE_CAPS,
-    check_duplicate_entry, record_session_entry, get_session_entries,
-    check_daily_stop, update_daily_state, get_daily_state,
+    check_duplicate_entry, record_session_entry,
+    check_daily_stop, get_daily_state,
     _daily_state_path,
 )
 

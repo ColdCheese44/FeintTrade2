@@ -9,7 +9,6 @@ Run: python -m pytest tests/test_discord_channels.py -v
 """
 
 import sys
-import time
 from pathlib import Path
 
 import pytest
