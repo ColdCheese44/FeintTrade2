@@ -171,6 +171,7 @@ def cmd_status():
     account   = run("research.py", "account")
     positions = run("research.py", "positions")
     clock     = run("trade.py", "status")
+    orders    = run("trade.py", "orders", "all")
 
     equity      = float(account.get("equity", 0))
     cash        = float(account.get("cash", 0))
@@ -179,7 +180,8 @@ def cmd_status():
     pnl_pct     = (day_pnl / last_equity * 100) if last_equity else 0
     market_open = clock.get("is_open", False)
     killed      = KILL_FLAG.exists()
-    pos_count   = len(positions) if isinstance(positions, list) else 0
+    pos_list    = normalize_positions(positions) if isinstance(positions, list) else []
+    pos_count   = len(pos_list)
 
     lines = [
         f"**FeintTrade Status** — {datetime.now().strftime('%H:%M MT')}",
@@ -190,6 +192,33 @@ def cmd_status():
         f"💵 Cash: ${cash:,.2f}",
         f"📋 Open Positions: {pos_count}",
     ]
+
+    # 🛒 Holdings — the purchases currently held (was only a count before).
+    if pos_list:
+        ot = _open_trades()
+        lines.append("\n**🛒 Holdings (purchases):**")
+        for p in pos_list[:10]:
+            sym     = p.get("symbol", "?")
+            qty     = float(p.get("qty", 0) or 0)
+            curr    = float(p.get("current_price", 0) or 0)
+            pnl     = float(p.get("unrealized_pl", 0) or 0)
+            pnl_pct = float(p.get("unrealized_plpc", 0) or 0) * 100
+            icon    = "🟢" if pnl >= 0 else "🔴"
+            strat   = (ot.get(sym) or {}).get("setup_type", "")
+            tag     = f" · {strat}" if strat else ""
+            lines.append(f"  {icon} **{sym}** {qty:g} @ ${curr:,.2f} — ${pnl:+,.2f} ({pnl_pct:+.1f}%){tag}")
+    else:
+        lines.append("\n🛒 Holdings: none — sitting in cash")
+
+    # 🧾 Recent orders — the approvals/buys the agent actually placed.
+    if isinstance(orders, list) and orders:
+        lines.append("\n**🧾 Recent orders:**")
+        for o in orders[:6]:
+            side  = (o.get("side") or "").upper()
+            sicon = "🟢" if side == "BUY" else "🔴"
+            stat  = (o.get("status") or "").upper()
+            lines.append(f"  {sicon} {side} {o.get('qty')} {o.get('symbol')} @ "
+                         f"${o.get('filled_avg_price') or o.get('limit_price') or '—'} — {stat}")
     return "\n".join(lines)
 
 
