@@ -246,6 +246,7 @@ EXIT_REASONS = {
     "target_hit",         # explicit target hit (alias for take_profit)
     "cycle_exit",         # generic cycle exit
     "pre_session_check",  # pre-session exit detection
+    "reconciled_partial", # tracked lot shrank to match the broker (late/external partial fill)
 }
 
 _REASON_ALIASES = {
@@ -391,25 +392,56 @@ def detect_and_log_exits(current_positions: list, exit_reason: str = "eod_close"
 
     current_syms = {normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
                     for p in current_positions}
+    # Live held qty per symbol — the broker is the source of truth for size.
+    current_qty = {}
+    for p in current_positions:
+        s = normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
+        try:
+            current_qty[s] = current_qty.get(s, 0.0) + abs(float(p.get("qty", 0) or 0))
+        except (TypeError, ValueError):
+            pass
     price_lookup = {normalize_symbol(k): v for k, v in (price_lookup or {}).items()}
     closed = []
+
+    def _recent(entry):
+        ts = entry.get("last_add") or entry.get("timestamp_entry")
+        if not ts:
+            return False
+        try:
+            return 0 <= (datetime.now() - datetime.fromisoformat(ts)).total_seconds() < _RECONCILE_MIN_AGE_SEC
+        except Exception:
+            return False
+
     for sym in list(open_trades.keys()):
-        if sym in current_syms:
-            continue
         entry = open_trades.get(sym, {})
+        if sym in current_syms:
+            # Position still open — but reconcile a tracked lot LARGER than the live held
+            # qty. A sell that was accepted-but-unfilled inside the order-poll window (then
+            # filled later), or an external/partial fill, shrinks the broker position WITHOUT
+            # logging an exit, leaving open_trades over-counting (the FAS 53-vs-11 bug). Log
+            # the missing partial at the real mark and shrink tracked qty to the broker truth.
+            try:
+                tracked = float(entry.get("qty", 0) or 0)
+            except (TypeError, ValueError):
+                tracked = 0.0
+            live = current_qty.get(sym, 0.0)
+            gap = tracked - live
+            if live > 0 and gap > max(1e-6, tracked * 0.005) and not _recent(entry):
+                px = price_lookup.get(sym) or _last_fill_price(sym) or entry.get("entry_price")
+                if px:
+                    # NOT a full close — the symbol is still held, so it is deliberately
+                    # NOT added to `closed`; this only realigns the tracked lot + logs P&L.
+                    log_exit(sym, float(px), "reconciled_partial",
+                             notes=f"reconciled tracked {tracked:g} → live {live:g} (late/external partial)",
+                             qty=gap)
+            continue
         # GUARD: a position opened moments ago can be absent from a snapshot captured
         # before the order filled (the cycle fetches positions, THEN buys, then
         # reconciles against that stale list). Don't fabricate a 0-hold round-trip for
         # it — this is what produced the phantom "$61k BTC buy" wins (entry + exit in
         # the same second). Real sells log their own exit at the point of sale.
-        ts = entry.get("timestamp_entry")
-        if ts:
-            try:
-                age = (datetime.now() - datetime.fromisoformat(ts)).total_seconds()
-                if 0 <= age < _RECONCILE_MIN_AGE_SEC:
-                    continue
-            except Exception:
-                pass
+        if _recent(entry):
+            continue
         px = price_lookup.get(sym) or _last_fill_price(sym)
         if px:
             log_exit(sym, float(px), exit_reason, notes="auto-detected close")

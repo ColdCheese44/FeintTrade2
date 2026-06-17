@@ -47,6 +47,16 @@ def test_status_update_posts_status_fields(monkeypatch, tmp_path):
     assert embed["color"] == dn.ORANGE
 
 
+def test_status_update_includes_failure_note(monkeypatch, tmp_path):
+    """On a routine error the __main__ finally-block passes a note; it must appear in the
+    posted snapshot (item #6: status pulse on every routine, including failures)."""
+    cap = _wire(monkeypatch, tmp_path,
+                {"equity": "95158", "cash": "51000", "last_equity": "95600"}, [])
+    dn.status_update("cycle", note="⚠️ routine ERRORED this run — see #ft-dev-log")
+    _, embed = cap[0]
+    assert "routine ERRORED" in embed["description"]
+
+
 def test_status_update_up_day_is_green(monkeypatch, tmp_path):
     cap = _wire(monkeypatch, tmp_path,
                 {"equity": "101000", "cash": "60000", "last_equity": "100000"}, [])

@@ -115,7 +115,11 @@ $cycle = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $weekdays -At 7:30AM
 $cycle.Repetition = (New-ScheduledTaskTrigger -Once -At 7:30AM `
     -RepetitionInterval (New-TimeSpan -Minutes 15) `
     -RepetitionDuration (New-TimeSpan -Hours 6 -Minutes 30)).Repetition
-Register-MhTask "Trading - Intraday Cycle" "run_intraday.bat" $cycle "Fresh-data cycle every 15 min during the session"
+# NOTE: run_intraday.bat deliberately invokes the FULL `cycle` routine (run_cycle: fresh
+# data + code-enforced swing exits + a model decision), NOT the lighter run_intraday().
+# Intentional, but it is the heaviest API-cost line — change the routine in the .bat, not
+# the schedule, to economize.
+Register-MhTask "Trading - Intraday Cycle" "run_intraday.bat" $cycle "Fresh-data FULL cycle (run_cycle) every 15 min during the session"
 
 # 14:15 Mon-Fri — end of day + detailed report
 Register-MhTask "Trading - EOD" "run_eod.bat" `

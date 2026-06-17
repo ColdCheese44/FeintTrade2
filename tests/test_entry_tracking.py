@@ -311,5 +311,85 @@ def test_execute_sell_unfilled_does_not_log_exit(L, monkeypatch):
     assert "NVDA" in L._load_open_trades()
 
 
+# ── 6. Partial-exit / late-fill reconciliation (the FAS 53-vs-11 bug) ──────────
+
+def _equity_pos(symbol, qty, price=100.0):
+    return {"symbol": symbol, "asset_class": "us_equity", "qty": str(qty),
+            "current_price": str(price), "avg_entry_price": str(price)}
+
+
+def test_partial_sell_through_execute_orders_reduces_open_lot(L, monkeypatch):
+    """A model TRIM that fills in-window logs a partial AND shrinks the tracked lot."""
+    import importlib
+    orch = importlib.import_module("scripts.orchestrator")
+    monkeypatch.setattr(orch, "_notify", lambda *a, **k: None)
+    monkeypatch.setattr(orch.trade, "place_order", lambda *a, **k: {"id": "x"})
+    monkeypatch.setattr(orch.trade, "get_order_fill", lambda *a, **k: (21.0, 147.0, "filled"))
+
+    L.log_entry("FAS", "buy", 53, 141.0, setup_type="bb_squeeze_breakout")
+    orch._execute_orders(
+        [{"symbol": "FAS", "qty": 21, "side": "sell", "limit_price": 147.0,
+          "setup_type": "bb_squeeze_breakout", "reasoning": "trim"}],
+        account={"equity": 100000, "cash": 90000},
+        positions=[_equity_pos("FAS", 53, 147.0)],
+        symbol_limits={"FAS": 20}, regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"FAS": "bb_squeeze_breakout"}, collect_events=[],
+    )
+    ot = L._load_open_trades()
+    assert "FAS" in ot and abs(float(ot["FAS"]["qty"]) - 32.0) < 1e-6   # 53 - 21
+    log = L._load_trade_log()
+    assert len(log) == 1 and log[0]["partial"] is True and abs(log[0]["qty"] - 21.0) < 1e-6
+
+
+def test_detect_reconciles_shrunk_tracked_lot(L):
+    """The FAS bug: a sell that filled LATE (outside the poll window) shrinks the broker
+    position without logging. detect_and_log_exits must realign tracked qty to the live
+    held qty, log the missing partial, and NOT report a full close."""
+    L.log_entry("FAS", "buy", 53, 141.0, setup_type="bb_squeeze_breakout")
+    _age_orphan(L, "FAS", minutes=120)              # past the recency guard
+
+    closed = L.detect_and_log_exits([_equity_pos("FAS", 11, 147.0)], "cycle_exit",
+                                    price_lookup={"FAS": 147.0})
+    assert closed == []                              # still held — not a full close
+    assert abs(float(L._load_open_trades()["FAS"]["qty"]) - 11.0) < 1e-6
+    log = L._load_trade_log()
+    assert len(log) == 1
+    assert log[0]["exit_reason"] == "reconciled_partial" and log[0]["partial"] is True
+    assert abs(log[0]["qty"] - 42.0) < 1e-6          # 53 - 11
+
+
+def test_detect_noop_when_tracked_matches_live(L):
+    L.log_entry("FAS", "buy", 11, 141.0, setup_type="bb_squeeze_breakout")
+    _age_orphan(L, "FAS", minutes=120)
+    closed = L.detect_and_log_exits([_equity_pos("FAS", 11, 147.0)], "cycle_exit",
+                                    price_lookup={"FAS": 147.0})
+    assert closed == [] and L._load_trade_log() == []          # nothing to reconcile
+    assert abs(float(L._load_open_trades()["FAS"]["qty"]) - 11.0) < 1e-6
+
+
+def test_detect_reconcile_respects_recency_guard(L):
+    """A lot opened/added seconds ago must NOT be reconciled (the sell may just be settling)."""
+    L.log_entry("FAS", "buy", 53, 141.0, setup_type="bb_squeeze_breakout")   # fresh entry
+    closed = L.detect_and_log_exits([_equity_pos("FAS", 11, 147.0)], "cycle_exit",
+                                    price_lookup={"FAS": 147.0})
+    assert closed == [] and L._load_trade_log() == []
+    assert abs(float(L._load_open_trades()["FAS"]["qty"]) - 53.0) < 1e-6      # untouched
+
+
+def test_final_close_after_partials_accounts_full_size(L):
+    """Partial then full close: two partials reduce the lot, the final close removes it,
+    and the three trade-log rows sum to the original size with no residual orphan."""
+    L.log_entry("FAS", "buy", 53, 141.0, setup_type="bb_squeeze_breakout")
+    L.log_exit("FAS", 147.0, "partial_profit", qty=21)         # 53 -> 32
+    L.log_exit("FAS", 148.0, "partial_profit", qty=10)         # 32 -> 22
+    assert abs(float(L._load_open_trades()["FAS"]["qty"]) - 22.0) < 1e-6
+    L.log_exit("FAS", 149.0, "take_profit")                    # full close of remaining 22
+    assert "FAS" not in L._load_open_trades()
+    log = L._load_trade_log()
+    assert len(log) == 3
+    assert abs(sum(t["qty"] for t in log) - 53.0) < 1e-6       # 21 + 10 + 22
+    assert [t["partial"] for t in log] == [True, True, False]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

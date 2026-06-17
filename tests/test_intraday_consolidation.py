@@ -80,6 +80,18 @@ def _wire_intraday(orch, monkeypatch, tmp_path, positions):
     return orders, journal, dle_calls, swing_calls
 
 
+def test_swing_stop_binds_tighter_than_regime(monkeypatch):
+    """run_trading now shares _manage_swing_exits, so morning-session stops fire at the
+    SWING stop (~-3%) — not the looser regime stop (-5%). A -4% loser (which the old
+    run_trading regime check would have RIDDEN) is cut; a -2% position is held."""
+    orch = importlib.import_module("scripts.orchestrator")
+    monkeypatch.setattr(orch, "trading_style", _swing_thresholds)   # swing_stop_pct = -3%
+    act, frac, _ = orch._swing_exit_decision("NVDA", -4.0, {})
+    assert act == "stop" and frac == 1.0
+    act_hold, _, _ = orch._swing_exit_decision("NVDA", -2.0, {})
+    assert act_hold is None
+
+
 def test_run_intraday_routes_equity_exit_through_manage_swing_exits(L, tmp_path, monkeypatch):
     """An equity below the swing stop is exited via the ONE canonical path; a deep-
     underwater crypto position in the SAME snapshot is left untouched (crypto-cycle's job)."""

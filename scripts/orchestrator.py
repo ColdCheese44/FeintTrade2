@@ -988,10 +988,10 @@ def _load_context() -> dict:
             min_score = caps.get("min_buy_score", 6)
             ts = trading_style()
             stop = ts.get("swing_stop_pct", -3.0)
-            min_rr = ts.get("min_reward_risk", 2.5)
-            partial = ts.get("partial_profit_pct", 6.0)
+            min_rr = ts.get("min_reward_risk", 2.0)
+            partial = ts.get("partial_profit_pct", 10.0)
             trail_arm = ts.get("trail_arm_pct", 5.0)
-            trail_give = ts.get("trail_giveback_pct", 3.0)
+            trail_give = ts.get("trail_giveback_pct", 4.0)
             ctx["strategy_brief"] = (
                 "=== ACTIVE STRATEGY: SWING / POSITION TRADING (overrides the old day-trade SOP) ===\n"
                 "GOAL: flip expectancy strongly positive, then let winners compound toward $100->$1,000. "
@@ -1169,6 +1169,32 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                     "symbol": sym, "side": side, "status": "rejected", "message": msg,
                 })
             continue
+
+        # ── Low-conviction hard gate (SOP: 3-4 = WATCH, 1-2 = HARD SKIP) ──────────
+        # conviction_factor() only SHRINKS an under-scored buy (0.30× for <5); it must
+        # never let a sub-threshold BUY execute as a small position. If the model attaches
+        # an explicit score/conviction BELOW the minimum-to-enter, reject it outright.
+        # (Scoreless buys are left to the setup_type gate + conviction clamp — the model is
+        # instructed to always score, and we don't want to block legit reconstructed/forced
+        # entries that carry no score.)
+        if side == "buy":
+            _score = order.get("score", order.get("conviction"))
+            try:
+                _sv = int(round(float(_score))) if _score not in (None, "") else None
+            except (TypeError, ValueError):
+                _sv = None
+            _min_score = int(caps.get("min_buy_score", 6) or 6)
+            if _sv is not None and _sv < _min_score:
+                msg = (f"BUY BLOCKED — {sym} score {_sv} is below the minimum-to-enter "
+                       f"{_min_score} (SOP: 3-4 = WATCH, 1-2 = HARD SKIP). No low-conviction entries.")
+                log.warning(msg)
+                print(f"  REJECTED (low-score): {sym} — {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                    })
+                continue
 
         if side == "buy":
             # Options trade in WHOLE contracts; equities/crypto can be fractional.
@@ -1715,31 +1741,16 @@ def run_trading():
     watchlist = load_watchlist()
     symbol_limits = {s["symbol"]: s["max_allocation_pct"] for s in watchlist["watchlist"]}
 
-    # Check for stop-losses on open positions FIRST
-    stop_orders = []
-    for p in (positions if isinstance(positions, list) else []):
-        pnl_pct = float(p.get("unrealized_plpc", 0)) * 100
-        stop_threshold = regime.get("stop_loss_pct", -5.0)
-        if pnl_pct <= stop_threshold:
-            curr_price = float(p.get("current_price", 0))
-            stop_price = round(curr_price * 0.998, 5 if is_crypto(p["symbol"]) else 2)
-            stop_orders.append({
-                "symbol": p["symbol"],
-                "qty": abs(float(p.get("qty", 0))),
-                "side": "sell",
-                "limit_price": stop_price,
-                "reasoning": f"MANDATORY STOP-LOSS: down {pnl_pct:.1f}% (threshold: {stop_threshold:.0f}%)",
-                "setup_type": "stop_loss",
-                "conviction": 10,
-            })
-            log.warning(f"Stop-loss triggered: {p['symbol']} {pnl_pct:.1f}%")
-            _notify("stop_loss_alert", p["symbol"], pnl_pct, p)
-
-    if stop_orders:
-        print(f"  Executing {len(stop_orders)} mandatory stop-loss orders...")
-        # Pass full regime dict; multiplier will be 1.0 for sells (side-aware in _execute_orders)
-        _execute_orders(stop_orders, account, positions, symbol_limits, regime, {})
-        # Refresh positions after stop-loss execution
+    # Enforce swing exits BEFORE the model decides — via the SAME single-source logic every
+    # other routine uses (_manage_swing_exits: hard stop at swing_stop_pct ≈ -3%, trailing
+    # stop, partial profit). The old bespoke loop here cut only at the looser REGIME stop
+    # (-5% in BULL), so a -4% loser would be cut by the 15-min cycle but ridden by the
+    # morning session — exactly the drift this removes.
+    exit_actions, _ = _manage_swing_exits(positions, note_prefix="Trading ")
+    if exit_actions:
+        for a in exit_actions:
+            print(f"  {a}")
+        log.info(f"Swing exits (trading session): {exit_actions}")
         positions = get_positions_norm()
         account   = run("research.py", "account")
 
@@ -1774,7 +1785,7 @@ Watchlist + limits:
 
 Regime: {regime.get('regime')}. SIZE AT FULL max_allocation_pct × conviction_factor.
 The system AUTOMATICALLY scales every order by the {regime.get('multiplier', 0.6)*100:.0f}% regime multiplier — do NOT pre-multiply or you will under-size.
-Stop-loss threshold: {regime.get('stop_loss_pct', -5.0):.0f}% (already enforced above for existing positions).
+Stop-loss: swing hard stop {swing_stop_pct():.0f}% (tighter than the regime {regime.get('stop_loss_pct', -5.0):.0f}%) — already code-enforced above on existing positions via the swing-exit manager (hard stop + trailing stop + partial).
 "No trade" is a valid, fully-acceptable outcome. Only act on genuine 3+ signal setups.
 
 For each symbol in today's research:
@@ -1784,7 +1795,7 @@ For each symbol in today's research:
 4. Position size (qty) = equity × max_alloc_pct × conviction_factor / entry_price. (system applies regime multiplier)
 5. Limit order only — within 0.2% of ask.
 6. SWING trading — HOLD winners multi-day/overnight while the trend and thesis hold; do NOT flatten at 1:45 PM. Exit a position only on its stop, a trailing-stop give-back, or a thesis break.
-7. Minimum risk/reward: 2.5:1. Define entry, stop, and target before entering.
+7. Minimum risk/reward: {trading_style().get('min_reward_risk', 2.0):g}:1. Define entry, stop, and target before entering.
 8. Every researched symbol MUST appear once in "candidates" with action BUY, HOLD, WATCH, or SKIP.
 
 For crypto (24/7): use time_in_force=gtc, fractional qty, scored system applies.
@@ -1930,9 +1941,9 @@ def _swing_exit_decision(sym: str, pnl_pct: float, peaks: dict) -> tuple:
     """
     ts = trading_style()
     stop = float(ts.get("swing_stop_pct", -3.0))
-    partial_at = float(ts.get("partial_profit_pct", 6.0))
+    partial_at = float(ts.get("partial_profit_pct", 10.0))
     trail_arm = float(ts.get("trail_arm_pct", 5.0))
-    trail_give = float(ts.get("trail_giveback_pct", 3.0))
+    trail_give = float(ts.get("trail_giveback_pct", 4.0))
 
     rec = peaks.get(sym) or {"peak": pnl_pct, "partialed": False}
     rec["peak"] = max(float(rec.get("peak", pnl_pct)), pnl_pct)
@@ -2254,8 +2265,8 @@ The system AUTOMATICALLY applies the {regime.get('regime')} regime multiplier of
 - Score 1-2: SKIP
 
 Step 4 — Winners (SWING — let them run, do NOT cap them):
-- up ~+6%: SELL about HALF to lock partial profit, let the rest run
-- then TRAIL the remainder — only exit if it gives back >3% from its peak, or the daily trend breaks (EMA9<EMA21). Do NOT auto-sell a winner just because it is up 15%; a strong trend can run much further — that is where the compounding comes from.
+- up ~+{trading_style().get('partial_profit_pct', 10):.0f}%: SELL about HALF to lock partial profit, let the rest run
+- then TRAIL the remainder — only exit if it gives back >{trading_style().get('trail_giveback_pct', 4):.0f}% from its peak (after arming at +{trading_style().get('trail_arm_pct', 5):.0f}%), or the daily trend breaks (EMA9<EMA21). Do NOT auto-sell a winner just because it is up a lot; a strong trend can run much further — that is where the compounding comes from.
 
 Step 5 — Calculate orders:
 - qty = (equity × alloc_factor) / latest_price, rounded to 5 decimals
@@ -2848,7 +2859,7 @@ Append ONLY these sections (do not repeat existing content):
 
 ### P&L Summary
 - Day P&L: ${day_pnl:+,.2f} ({day_pnl_pct:+.2f}%)
-- Open positions carried overnight (crypto only — note which and why)
+- Open positions carried overnight (SWING — equities are intentionally held multi-day while the thesis/trend holds, plus crypto 24/7; note which and why. No forced equity flatten.)
 - Positions closed today (symbol, entry, exit, P&L, setup type used)
 
 ### What Worked Today
@@ -2918,7 +2929,10 @@ def run_afterhours():
     log.info("=== After-hours wrap started ===")
     positions = get_positions_norm()
 
-    # Hard rule: UVXY decays — never hold it overnight.
+    # Hard rule: UVXY decays — never hold it overnight. Liquidate, CONFIRM the fill, and
+    # log the exit explicitly. The old code logged via a PRE-sell snapshot, so the exit was
+    # either missed or (now that detect reconciles shrunk lots) only caught a cycle later.
+    uvxy_closed = False
     for p in positions:
         if normalize_symbol(p.get("symbol", "")) == "UVXY":
             qty = abs(float(p.get("qty", 0) or 0))
@@ -2927,6 +2941,18 @@ def run_afterhours():
                 res = trade.place_order("UVXY", qty, "sell", round(curr * 0.997, 2))
                 log.warning(f"After-hours UVXY liquidation: {res}")
                 _notify("alert", f"UVXY liquidated after-hours (no overnight hold rule): {qty} @ ~${curr:.2f}")
+                if isinstance(res, dict) and not res.get("error"):
+                    filled_qty, fill_px, _ = _confirm_order_fill(res, qty, curr)
+                    if filled_qty > 0:
+                        log_exit("UVXY", fill_px, "system_correction",
+                                 notes="no-overnight UVXY liquidation", qty=filled_qty,
+                                 entry_price=float(p.get("avg_entry_price", 0) or 0))
+                        uvxy_closed = True
+
+    # Refresh the snapshot after the liquidation so the trailing learning sync reconciles
+    # against the POST-sell book, not the stale pre-sell one.
+    if uvxy_closed:
+        positions = get_positions_norm()
 
     detect_and_log_exits(positions, "afterhours_close")
     try:
@@ -3129,6 +3155,7 @@ if __name__ == "__main__":
         _activity = None
     if _activity and routine:
         _activity.log("routine_start", routine)
+    _routine_ok = True
     try:
         if routine == "research":
             run_research()
@@ -3156,15 +3183,19 @@ if __name__ == "__main__":
             sys.exit(1)
         if _activity and routine:
             _activity.log("routine_done", routine)
-        # Post the !status snapshot to #ft-command-post after every trading routine, so the
-        # channel is a live pulse (equity / day P&L / cash / positions) of the book on every
-        # cycle/trade/research. Best-effort — never fails the routine.
-        if routine in _STATUS_ROUTINES:
-            _notify("status_update", routine)
     except Exception as e:
+        _routine_ok = False
         log.exception(f"Routine '{routine}' failed: {e}")
         _notify("dev_log", f"Routine '{routine}' failed: {e}", "error")
         if _activity and routine:
             _activity.log("routine_error", f"{routine}: {e}", error=str(e)[:200])
         print(f"FATAL ERROR in '{routine}': {e}")
+    finally:
+        # Post the !status snapshot to #ft-command-post on EVERY trading routine — including
+        # failures — so the channel is a live pulse (equity / day P&L / cash / positions)
+        # even when a routine crashed. Best-effort; never masks the routine's exit code.
+        if routine in _STATUS_ROUTINES:
+            _notify("status_update", routine,
+                    note=("" if _routine_ok else "⚠️ routine ERRORED this run — see #ft-dev-log"))
+    if not _routine_ok:
         sys.exit(1)

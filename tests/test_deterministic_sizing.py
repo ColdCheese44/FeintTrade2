@@ -96,6 +96,39 @@ def _wire_orchestrator(monkeypatch, tmp_path, placed):
     return orch
 
 
+def test_low_score_buy_is_hard_blocked(monkeypatch, tmp_path):
+    """SOP: a BUY scored below the minimum-to-enter is WATCH/SKIP, not a small position.
+    A score-2 order must be rejected before place_order (conviction_factor only shrinks it)."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
+    events = []
+    orch._execute_orders(
+        [{"symbol": "NVDA", "qty": 50, "side": "buy", "limit_price": 100.0,
+          "setup_type": "momentum_breakout", "score": 2, "conviction": 2, "reasoning": "weak"}],
+        account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
+        positions=[], symbol_limits={"NVDA": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"NVDA": "momentum_breakout"}, collect_events=events,
+    )
+    assert not placed, "a score-2 buy must never reach place_order"
+    assert any(e["status"] == "rejected" and "below the minimum" in e["message"] for e in events)
+
+
+def test_qualifying_score_buy_passes_low_score_gate(monkeypatch, tmp_path):
+    """A score-8 buy clears the low-score gate (≥ any min_buy_score 5/6) and is placed."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
+    orch._execute_orders(
+        [{"symbol": "NVDA", "qty": 50, "side": "buy", "limit_price": 100.0,
+          "setup_type": "momentum_breakout", "score": 8, "conviction": 8, "reasoning": "strong"}],
+        account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
+        positions=[], symbol_limits={"NVDA": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"NVDA": "momentum_breakout"}, collect_events=[],
+    )
+    assert placed and placed[0][0] == "NVDA"
+
+
 def test_oversized_model_buy_is_clamped_not_placed(monkeypatch, tmp_path):
     placed = []
     orch = _wire_orchestrator(monkeypatch, tmp_path, placed)

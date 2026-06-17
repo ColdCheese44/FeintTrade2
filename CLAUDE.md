@@ -39,7 +39,7 @@ Where this section conflicts with anything below, THIS WINS. (`trading_style` in
    RELEASE** (not active/coiling/bearish), MACD bullish, price reclaiming/above VWAP, OBV rising,
    volume pickup, in an up-trending name (EMA9>EMA21>EMA50). **Do NOT buy extreme-fear dips, falling
    knives, coiling squeezes, or below-VWAP weakness.** If nothing confirms, hold cash.
-3. **Reward:Risk ≥ 2.5:1.** Define entry, stop, target before entering.
+3. **Reward:Risk ≥ the configured minimum** (`trading_style.min_reward_risk`, currently **2:1**; prompts read this value live so doc and config can't drift). Define entry, stop, target before entering.
 4. **Cut losers FAST at −3%** (tighter than regime −5%); never average down. **Let winners run:**
    take partial (~half) near +10%, then trail the rest — give back at most 4% from the peak.
    (Aggressive profile: winners run further before trimming; the −3% loss cut is unchanged.)

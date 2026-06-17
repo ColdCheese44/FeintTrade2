@@ -5,8 +5,14 @@
 # crypto task if re-run after register_all_tasks.ps1. Crypto trades 24/7 — the trigger
 # below runs every day.
 #
+# COMPATIBILITY-ONLY: this helper uses an InteractiveToken XML principal, so the task runs
+# ONLY while user 'brend' is interactively logged in — UNLIKE the canonical
+# register_all_tasks.ps1, which registers crypto headless via S4U (runs whether or not
+# you are signed in, survives reboots). Use register_all_tasks.ps1 for production; keep
+# this file only for an old runbook that references it.
+#
 # Run this script as Administrator once to (re-)register the 30-minute crypto trading task.
-Write-Host "NOTE: register_crypto_task.ps1 is deprecated — register_all_tasks.ps1 is the canonical registrar."
+Write-Host "NOTE: register_crypto_task.ps1 is deprecated/compatibility-only (InteractiveToken — needs an active login). register_all_tasks.ps1 is the canonical headless (S4U) registrar."
 $xml = @'
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

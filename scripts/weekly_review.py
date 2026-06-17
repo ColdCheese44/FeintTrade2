@@ -11,8 +11,8 @@ read-only analytics engines that are otherwise on-demand only (!intel/!lab/!benc
 Each section is isolated so one failure never blocks the others. These are analytics
 over the trade log — they do not place trades. Cheap (≈ once/week).
 
-Run:  python scripts/weekly_review.py            # run + post to Discord
-      python scripts/weekly_review.py dry          # run, do NOT post (smoke test)
+Run:  python scripts/weekly_review.py            # run the analyses + post to Discord
+      python scripts/weekly_review.py dry          # run the analyses, do NOT post
 """
 
 import importlib
@@ -22,25 +22,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-# (module name, name of its Discord-posting callable)
+# (module, compute callable [dry — runs the analysis, no Discord], post callable [live]).
+# Dry mode actually EXERCISES the analysis so it catches analysis bugs, not just imports.
 _SECTIONS = (
-    ("intel_audit", "post"),
-    ("strategy_lab", "post"),
-    ("replay", "post_report"),
+    ("intel_audit", "audit", "post"),
+    ("strategy_lab", "format_report", "post"),
+    ("replay", "benchmark_report", "post_report"),
 )
 
 
 def run(do_post: bool = True) -> dict:
-    """Run each weekly-review section. Returns {module: 'ok' | 'failed: <err>'}."""
+    """Run each weekly-review section. do_post=True posts to Discord; do_post=False (dry)
+    runs the analysis WITHOUT posting. Returns {module: 'ok' | 'failed: <err>'}. One section
+    failing never blocks the others."""
     results = {}
-    for mod_name, fn_name in _SECTIONS:
+    for mod_name, compute_fn, post_fn in _SECTIONS:
+        fn_name = post_fn if do_post else compute_fn
         try:
             mod = importlib.import_module(mod_name)
-            fn = getattr(mod, fn_name)
-            if do_post:
-                fn()
+            getattr(mod, fn_name)()
             results[mod_name] = "ok"
-        except Exception as e:                       # one section failing must not block the rest
+        except Exception as e:
             results[mod_name] = f"failed: {e}"
             print(f"weekly_review: {mod_name}.{fn_name} failed: {e}", file=sys.stderr)
     return results
