@@ -555,10 +555,11 @@ def status_update(routine, account=None, positions=None, note=""):
 
     killed = (_ROOT / "kill.flag").exists()
     try:
-        from common import market_phase
+        from common import market_phase, normalize_symbol as _norm
         phase = market_phase()
     except Exception:
         phase = ""
+        _norm = None
     if killed:
         state = "🛑 KILL SWITCH ACTIVE — trading halted"
     elif phase == "REGULAR":
@@ -568,13 +569,34 @@ def status_update(routine, account=None, positions=None, note=""):
     else:
         state = "🔴 Market Closed · crypto 24/7"
 
+    invested = equity - cash
+    cash_pct = (cash / equity * 100) if equity else 0.0
     color = RED if killed else (GREEN if day_pnl >= 0 else ORANGE)
     fields = [
         {"name": "💰 Portfolio",      "value": f"${equity:,.2f}",                       "inline": True},
         {"name": "📊 Day P&L",        "value": f"${day_pnl:+,.2f} ({day_pct:+.2f}%)",   "inline": True},
-        {"name": "💵 Cash",           "value": f"${cash:,.2f}",                         "inline": True},
-        {"name": "📋 Open Positions", "value": str(n_pos),                              "inline": True},
+        {"name": "💵 Cash",           "value": f"${cash:,.2f} ({cash_pct:.0f}%)",       "inline": True},
     ]
+
+    # 🛒 Holdings — list the ACTUAL positions, not just a count, so each per-cycle card
+    # reflects what was bought/sold (the count alone made buys/sells invisible).
+    if positions:
+        held_lines = []
+        for p in positions[:8]:
+            sym  = _norm(p.get("symbol", ""), p.get("asset_class")) if _norm else p.get("symbol", "?")
+            qty  = float(p.get("qty", 0) or 0)
+            curr = float(p.get("current_price", 0) or 0)
+            ppc  = float(p.get("unrealized_plpc", 0) or 0) * 100
+            icon = "🟢" if ppc >= 0 else "🔴"
+            held_lines.append(f"{icon} {sym} {qty:g} @ ${curr:,.2f} ({ppc:+.1f}%)")
+        held_value = "\n".join(held_lines)
+        if n_pos > 8:
+            held_value += f"\n… +{n_pos - 8} more"
+    else:
+        held_value = "none — sitting in cash"
+    fields.append({"name": f"🛒 Holdings ({n_pos}) · invested ${invested:,.0f}",
+                   "value": held_value[:1024], "inline": False})
+
     send(
         msg_type="status_update",
         title=f"📟 Status · {routine}",

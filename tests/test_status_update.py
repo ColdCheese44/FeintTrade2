@@ -32,17 +32,21 @@ def _wire(monkeypatch, tmp_path, account, positions, enabled=True):
 def test_status_update_posts_status_fields(monkeypatch, tmp_path):
     cap = _wire(monkeypatch, tmp_path,
                 {"equity": "95158", "cash": "51000", "last_equity": "95600"},
-                [{"symbol": "FAS"}, {"symbol": "TQQQ"}])
+                [{"symbol": "FAS", "qty": "6", "current_price": "150", "unrealized_plpc": "0.05"},
+                 {"symbol": "TQQQ", "qty": "10", "current_price": "78", "unrealized_plpc": "-0.02"}])
     dn.status_update("cycle")
     assert len(cap) == 1
     mt, embed = cap[0]
     assert mt == "status_update"
     assert "Status" in embed["title"] and "cycle" in embed["title"]
     names = " ".join(f["name"] for f in embed["fields"])
-    assert "Portfolio" in names and "Day P&L" in names and "Cash" in names and "Open Positions" in names
+    assert "Portfolio" in names and "Day P&L" in names and "Cash" in names and "Holdings" in names
     vals = {f["name"]: f["value"] for f in embed["fields"]}
     assert "$95,158.00" in next(v for k, v in vals.items() if "Portfolio" in k)
-    assert next(v for k, v in vals.items() if "Open Positions" in k) == "2"
+    # Holdings field lists the actual positions (not just a count), named "Holdings (2) …"
+    held_name, held_val = next((k, v) for k, v in vals.items() if "Holdings" in k)
+    assert "(2)" in held_name
+    assert "FAS" in held_val and "TQQQ" in held_val
     # Down day (95158 < 95600), not killed -> ORANGE
     assert embed["color"] == dn.ORANGE
 
@@ -63,8 +67,9 @@ def test_status_update_up_day_is_green(monkeypatch, tmp_path):
     dn.status_update("crypto")
     _, embed = cap[0]
     assert embed["color"] == dn.GREEN
-    # no positions -> "0"
-    assert next(f["value"] for f in embed["fields"] if "Open Positions" in f["name"]) == "0"
+    # no positions -> Holdings (0) with the cash message
+    held = next(f for f in embed["fields"] if "Holdings" in f["name"])
+    assert "(0)" in held["name"] and "cash" in held["value"].lower()
 
 
 def test_status_update_respects_disable_flag(monkeypatch, tmp_path):
