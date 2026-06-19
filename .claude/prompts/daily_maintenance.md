@@ -38,6 +38,10 @@ conservative. Use the project's subagents for the specialized work.
 - If you changed code: ensure the full suite passes, commit to the **current branch** with a
   clear message (end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`), and `git push`.
   If nothing needed fixing, do NOT commit.
+- **Keep a review-ready PR open.** After pushing, if the current branch is NOT `main` and has
+  no open PR, open one against `main`: `gh pr create --base main --fill` (or a concise
+  title/body). If a PR already exists, the push already updated it — do nothing. Never merge
+  it; the operator reviews. (Never push to `main` or force-push — the guard hook blocks both.)
 - Post a concise (≤8-line) summary of findings + actions to Discord **#ft-reports** via:
   `python -c "import sys; sys.path.insert(0,'scripts'); import discord_notify as dn; dn.send(title='🛠️ Daily Maintenance', description='<your summary>', msg_type='report')"`
 - Print the same summary as your final message.

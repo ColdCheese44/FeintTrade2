@@ -10,10 +10,16 @@ Everything that lets Claude run this project safely and (semi-)autonomously.
   live-trading/order/force-push/push-to-main/scheduler-registration commands for **every**
   session in this repo (interactive *and* the headless task). Enforced even under
   `--dangerously-skip-permissions`, which a permission deny-list is not.
-- **Daily task** (`run_claude_maintenance.bat`, Windows Scheduler 7:00 PM) — headless
-  `claude -p` runs the maintenance prompt: analyze trade logs → debug → verify Discord →
-  autofix (test-backed) → commit to the branch + push → post a summary to #ft-reports.
+- **Daily task** (`run_claude_maintenance.bat`, Windows Scheduler 7:00 PM, **sonnet**) —
+  headless `claude -p` runs `prompts/daily_maintenance.md`: analyze trade logs → debug →
+  verify Discord → autofix (test-backed) → commit to the branch + push → **keep a PR open**
+  (`gh pr create` if none) → post a summary to #ft-reports.
+- **Weekly deep review** (`run_claude_weekly.bat`, Sunday 5:00 PM, **opus**) — headless
+  `claude -p` runs `prompts/weekly_deep_review.md`: deep performance + decision-intelligence
+  + setup/regime + risk-posture analysis, applies clear test-backed tuning, and writes bigger
+  recommendations for human review → #ft-reports. (Cheap daily sonnet + powerful weekly opus.)
 - **CI** (`.github/workflows/ci.yml`) — compile + pytest on push/PR.
+- Override the model per run with `CLAUDE_MODEL` (daily) / `CLAUDE_WEEKLY_MODEL` (weekly).
 
 ## One-time activation note
 On your next **interactive** Claude Code session in this repo, you'll get a one-time prompt

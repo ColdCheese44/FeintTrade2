@@ -536,7 +536,8 @@ Registered by `register_all_tasks.ps1`. The flow is **research → synthesis (jo
 | Every 2h, 24/7 | Market Research (free-source synthesis → strategy bias) | run_market_research.bat → market_research.py |
 | 6:30 AM Monday | Weekly Review (intel audit + strategy lab + benchmark → Discord) | run_weekly_review.bat → weekly_review.py |
 | 2:00 AM daily | Nightly State Backup (data/ + journal/ → backups/, keep 14) | run_backup.bat → backup_state.py |
-| 7:00 PM daily | Claude Maintenance — headless Claude analyzes trade logs, debugs, verifies Discord, autofixes (commits to branch + posts to #ft-reports) | run_claude_maintenance.bat → claude -p `.claude/prompts/daily_maintenance.md` |
+| 7:00 PM daily | Claude Maintenance — headless Claude (sonnet) analyzes trade logs, debugs, verifies Discord, autofixes (commits to branch, keeps a PR open, posts to #ft-reports) | run_claude_maintenance.bat → claude -p `.claude/prompts/daily_maintenance.md` |
+| 5:00 PM Sunday | Claude Weekly Deep Review — headless Claude (opus) deep performance/strategy analysis + tuning + human-review recommendations → #ft-reports | run_claude_weekly.bat → claude -p `.claude/prompts/weekly_deep_review.md` |
 | At logon | Discord bot (`!heartbeat` runs a full cycle) | run_bot.bat |
 
 Both the EOD (2:15 PM) and after-hours (6:15 PM) routines post a **detailed, exportable report**

@@ -16,6 +16,7 @@
 #    06:30  Weekly Review                 Monday    intel + strategy lab + benchmark
 #    02:00  Nightly State Backup          every day data/ + journal/ -> backups/
 #    19:00  Claude Maintenance (headless) every day analyze logs + debug + verify Discord + autofix
+#    17:00  Claude Weekly Review (opus)   Sunday    deep strategy analysis + tuning + recommendations
 #    boot   Discord bot (auto-restart)    starts at STARTUP, headless
 #
 #  The flow is research -> synthesis(journal) -> decisions, by design.
@@ -154,6 +155,14 @@ Register-MhTask "Trading - Market Research" "run_market_research.bat" $research 
 # on-demand only (!intel/!lab/!benchmark). Posts to Discord; never trades.
 Register-MhTask "Trading - Weekly Review" "run_weekly_review.bat" `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 6:30AM) "Weekly review: intel audit + strategy lab + benchmark vs baselines"
+
+# 17:00 Sunday — DEEP weekly strategy review via headless Claude (opus). Goes broader than
+# the daily maintenance: full performance + decision-intelligence + setup/regime fit + risk
+# posture, applies clear test-backed changes, writes bigger recommendations for human review,
+# and posts a structured review to #ft-reports. Lands before Monday's open. (Requires the
+# Claude Code CLI; never places orders.) Generous time limit for an opus deep-think.
+Register-MhTask "Trading - Claude Weekly Review" "run_claude_weekly.bat" `
+    (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 5:00PM) "Weekly DEEP Claude strategy review (opus): analyze + tune + recommend" 45
 
 # 02:00 daily — nightly state backup. Zips data/ + journal/ (the local-only, gitignored
 # trade log + learning history) to backups/ and keeps the most recent 14. Zero API cost.
