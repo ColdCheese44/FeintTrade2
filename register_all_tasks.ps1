@@ -15,6 +15,7 @@
 #    every 2h  Market Research synthesis  every day (24/7, bi-hourly)
 #    06:30  Weekly Review                 Monday    intel + strategy lab + benchmark
 #    02:00  Nightly State Backup          every day data/ + journal/ -> backups/
+#    19:00  Claude Maintenance (headless) every day analyze logs + debug + verify Discord + autofix
 #    boot   Discord bot (auto-restart)    starts at STARTUP, headless
 #
 #  The flow is research -> synthesis(journal) -> decisions, by design.
@@ -158,6 +159,14 @@ Register-MhTask "Trading - Weekly Review" "run_weekly_review.bat" `
 # trade log + learning history) to backups/ and keeps the most recent 14. Zero API cost.
 Register-MhTask "Trading - State Backup" "run_backup.bat" `
     (New-ScheduledTaskTrigger -Daily -At 2:00AM) "Nightly backup of data/ + journal/ to backups/ (keep 14)"
+
+# 19:00 daily — autonomous Claude maintenance (headless): analyzes the trade logs, debugs,
+# verifies Discord comms, and autofixes clear/test-verified issues, then commits+pushes the
+# branch and posts a summary to #ft-reports. Runs after the after-hours wrap so the full
+# day's data is in. Requires the Claude Code CLI installed + authenticated (see the .bat).
+# Generous time limit (LLM run); never places orders (paper system; prompt forbids it).
+Register-MhTask "Trading - Claude Maintenance" "run_claude_maintenance.bat" `
+    (New-ScheduledTaskTrigger -Daily -At 7:00PM) "Daily headless Claude: analyze logs, debug, verify Discord, autofix" 30
 
 # at STARTUP + logon — Discord bot (its .bat auto-restarts; no execution time limit).
 # AtStartup brings it up headless on boot before anyone signs in; AtLogon is a
