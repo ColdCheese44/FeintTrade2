@@ -696,7 +696,18 @@ def get_strategy_recommendations() -> str:
         if best_s[1]["trades"] >= 3:
             recs.append(f"📈 BEST SETUP: '{best_s[0]}' — {best_s[1]['win_rate']}% WR, ${best_s[1]['total_pnl']:+,.2f}. PRIORITIZE this setup.")
         if worst_s[1]["trades"] >= 3 and worst_s[1]["total_pnl"] < -100:
-            recs.append(f"📉 WORST SETUP: '{worst_s[0]}' — losing ${abs(worst_s[1]['total_pnl']):,.2f}. REDUCE size or skip.")
+            # Escalate from advisory to a hard STOP when a setup is the dominant, repeated
+            # loss source (≥5 trades, sub-40% WR, ≤ -$1k). Data-driven + self-updating — no
+            # hardcoded setup name, so it can't overfit or go stale. (momentum_breakout hit
+            # this bar: 33% WR over 9 trades, -$3.3k, incl. a -5% SOXL gap-through-stop.)
+            w = worst_s[1]
+            if w["trades"] >= 5 and w["win_rate"] < 40 and w["total_pnl"] <= -1000:
+                recs.append(f"🛑 STOP SETUP: '{worst_s[0]}' is the dominant loss source — "
+                            f"{w['win_rate']}% WR over {w['trades']} trades, ${w['total_pnl']:+,.2f}. "
+                            f"Do NOT open new trades with this setup; use a proven one "
+                            f"(e.g. '{best_s[0]}') instead.")
+            else:
+                recs.append(f"📉 WORST SETUP: '{worst_s[0]}' — losing ${abs(w['total_pnl']):,.2f}. REDUCE size or skip.")
 
     # Best/worst symbols
     sym_perf = stats.get("by_symbol", {})
