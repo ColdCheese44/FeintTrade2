@@ -19,5 +19,9 @@ def _hermetic_no_live_orders(monkeypatch):
     try:
         import trade
         monkeypatch.setattr(trade, "_pending_crypto_notional", lambda: 0.0)
+        # equities_open_now() hits the live Alpaca /v2/clock. Pin it OPEN so equity
+        # exit/order paths behave as the suite assumes (it already pins market_phase to
+        # REGULAR where needed). A dedicated test overrides this to exercise the closed gate.
+        monkeypatch.setattr(trade, "equities_open_now", lambda *a, **k: True)
     except Exception:
         pass

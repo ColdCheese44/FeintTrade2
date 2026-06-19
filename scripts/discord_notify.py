@@ -560,10 +560,19 @@ def status_update(routine, account=None, positions=None, note=""):
     except Exception:
         phase = ""
         _norm = None
+    # market_phase() is time-based and HOLIDAY-BLIND (it called Juneteenth "REGULAR"). Use
+    # the broker clock to correct the label during would-be regular hours. eq_open is None
+    # when the clock can't be reached (fail-open to the time-based label).
+    eq_open = None
+    try:
+        import trade as _trade
+        eq_open = _trade.equities_open_now()
+    except Exception:
+        eq_open = None
     if killed:
         state = "🛑 KILL SWITCH ACTIVE — trading halted"
     elif phase == "REGULAR":
-        state = "🟢 Market Open"
+        state = "🟢 Market Open" if eq_open is not False else "🔴 Market Closed (holiday) · crypto 24/7"
     elif phase in ("PRE_MARKET", "AFTER_HOURS"):
         state = f"🟡 {phase.replace('_', ' ').title()} · crypto 24/7"
     else:

@@ -72,6 +72,41 @@ def test_status_update_up_day_is_green(monkeypatch, tmp_path):
     assert "(0)" in held["name"] and "cash" in held["value"].lower()
 
 
+def test_status_card_shows_holiday_when_clock_closed(monkeypatch, tmp_path):
+    """During would-be regular hours, if the broker clock says equities are CLOSED (a
+    holiday like Juneteenth that the time-based market_phase mislabels REGULAR), the card
+    must say 'Market Closed (holiday)', not 'Market Open'."""
+    cap = _wire(monkeypatch, tmp_path,
+                {"equity": "92043", "cash": "63819", "last_equity": "92043"}, [])
+    monkeypatch.setattr(dn, "_status_updates_enabled", lambda: True)
+    import common
+    monkeypatch.setattr(common, "market_phase", lambda: "REGULAR")
+    import trade
+    monkeypatch.setattr(trade, "equities_open_now", lambda *a, **k: False)
+    dn.status_update("cycle")
+    _, embed = cap[0]
+    assert "Market Closed (holiday)" in embed["description"]
+    assert "Market Open" not in embed["description"]
+
+
+def test_equities_open_now_caches_and_fails_open(monkeypatch):
+    """trade.equities_open_now(): one clock call per TTL window; fail-open if unreachable."""
+    monkeypatch.undo()                       # drop the conftest pin to test the real fn
+    import trade
+    trade._CLOCK_CACHE.update(ts=0.0, val=None)
+    calls = []
+    monkeypatch.setattr(trade, "get_market_status", lambda: (calls.append(1) or {"is_open": False}))
+    assert trade.equities_open_now() is False
+    assert trade.equities_open_now() is False
+    assert len(calls) == 1                    # second call served from cache
+    trade._CLOCK_CACHE.update(ts=0.0, val=None)
+
+    def _boom():
+        raise RuntimeError("network")
+    monkeypatch.setattr(trade, "get_market_status", _boom)
+    assert trade.equities_open_now(default=True) is True   # fail-open, no cache
+
+
 def test_status_update_respects_disable_flag(monkeypatch, tmp_path):
     cap = _wire(monkeypatch, tmp_path, {"equity": "100"}, [], enabled=False)
     dn.status_update("cycle")

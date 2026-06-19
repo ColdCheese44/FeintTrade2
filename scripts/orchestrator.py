@@ -1196,6 +1196,22 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                     })
                 continue
 
+        # ── Equity/option market-closed gate (holiday/weekend/after-hours) ───────
+        # The broker clock is authoritative (market_phase() is time-based and HOLIDAY-BLIND
+        # — it called Juneteenth "open"). A non-crypto BUY when equities are closed can't
+        # fill; it just rests until the next cycle cancels it as stale, churning API + order
+        # spam. Skip it here so EVERY routine is protected. Crypto trades 24/7 — never gated.
+        if side == "buy" and not _is_crypto(sym) and not trade.equities_open_now():
+            msg = (f"BUY SKIPPED — {sym}: equity/options market is closed "
+                   f"(broker clock; holiday/weekend/after-hours). Order would not fill.")
+            log.info(msg)
+            print(f"  SKIP (market closed): {sym}")
+            if collect_events is not None:
+                collect_events.append({
+                    "symbol": sym, "side": side, "status": "skipped", "message": msg,
+                })
+            continue
+
         if side == "buy":
             # Options trade in WHOLE contracts; equities/crypto can be fractional.
             if is_option(sym):
@@ -2000,7 +2016,10 @@ def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
     peaks = _load_peaks()
     live_symbols = set()
     managed_classes = set()                      # asset classes this call actually manages
-    equity_open = market_phase() == "REGULAR"   # equity orders only fill in regular hours
+    # Equity orders only fill when the BROKER says the market is open. Use the Alpaca clock
+    # (holiday-aware), not the time-based market_phase() which labels a holiday as REGULAR
+    # and would fire equity exits that can't fill (then get swept as stale).
+    equity_open = trade.equities_open_now()
     for p in positions:
         sym = p.get("symbol")
         if not sym:
@@ -2448,6 +2467,16 @@ def run_cycle():
         append_journal_text(f"\n### Swing exits — {now_mt()}\n" + "".join(f"- {a}\n" for a in exit_actions))
         positions = [p for p in positions
                      if normalize_symbol(p.get("symbol", ""), p.get("asset_class")) not in closed_syms]
+
+    # If equities are CLOSED today (broker clock — holiday/weekend), the costly equity
+    # decision below would only place orders that can't fill (then get cancelled next
+    # cycle). Crypto is handled by the 30-min run_crypto, and swing exits already ran above,
+    # so stop here to save the API spend instead of churning all day on a holiday.
+    if not trade.equities_open_now():
+        log.info("run_cycle: equities closed (broker clock) — skipping the equity decision "
+                 "(crypto handled by run_crypto).")
+        print("  Equities closed — no new cycle decision (crypto runs on its own schedule).")
+        return
 
     watchlist     = load_watchlist()
     symbol_limits = {s["symbol"]: s["max_allocation_pct"] for s in watchlist["watchlist"]}

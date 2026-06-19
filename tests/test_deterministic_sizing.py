@@ -129,6 +129,32 @@ def test_qualifying_score_buy_passes_low_score_gate(monkeypatch, tmp_path):
     assert placed and placed[0][0] == "NVDA"
 
 
+def test_equity_buy_skipped_when_market_closed_crypto_allowed(monkeypatch, tmp_path):
+    """On a market holiday/weekend (broker clock closed), a non-crypto BUY can't fill and is
+    skipped; crypto trades 24/7 and still goes through. Guards the Juneteenth churn bug."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
+    monkeypatch.setattr(orch.trade, "equities_open_now", lambda *a, **k: False)  # holiday
+    monkeypatch.setattr(orch, "_get_snapshot", lambda s: {})                      # no crypto re-price net call
+    events = []
+    orch._execute_orders(
+        [{"symbol": "NVDA", "qty": 10, "side": "buy", "limit_price": 100.0,
+          "setup_type": "momentum_breakout", "score": 8, "conviction": 8},
+         {"symbol": "BTC/USD", "qty": 0.01, "side": "buy", "limit_price": 60000.0,
+          "setup_type": "crypto_scored", "score": 8, "conviction": 8}],
+        account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
+        positions=[], symbol_limits={"NVDA": 30, "BTC/USD": 35},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"NVDA": "momentum_breakout", "BTC/USD": "crypto_scored"},
+        collect_events=events,
+    )
+    placed_syms = [p[0] for p in placed]
+    assert "NVDA" not in placed_syms                      # equity buy skipped (market closed)
+    assert "BTC/USD" in placed_syms                       # crypto still trades 24/7
+    assert any(e["symbol"] == "NVDA" and e["status"] == "skipped" and "market is closed" in e["message"]
+               for e in events)
+
+
 def test_oversized_model_buy_is_clamped_not_placed(monkeypatch, tmp_path):
     placed = []
     orch = _wire_orchestrator(monkeypatch, tmp_path, placed)

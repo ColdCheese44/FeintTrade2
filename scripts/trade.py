@@ -67,6 +67,30 @@ def get_market_status():
     return response.json()
 
 
+_CLOCK_CACHE = {"ts": 0.0, "val": None}
+
+
+def equities_open_now(ttl: int = 60, default=True) -> bool:
+    """
+    Authoritative 'can equities trade right now?' from the Alpaca clock (cached ~`ttl`s).
+    Unlike common.market_phase() — which is purely time-based and HOLIDAY-BLIND (it labels
+    a market holiday like Juneteenth as REGULAR) — the broker clock knows holidays and the
+    real session bounds. Returns `default` (True, fail-open) if the clock can't be reached,
+    so a transient network blip never silently halts trading.
+    """
+    import time as _t
+    now = _t.time()
+    if _CLOCK_CACHE["val"] is not None and now - _CLOCK_CACHE["ts"] < ttl:
+        return _CLOCK_CACHE["val"]
+    try:
+        is_open = bool(get_market_status().get("is_open"))
+        _CLOCK_CACHE.update(ts=now, val=is_open)
+        return is_open
+    except Exception:
+        prev = _CLOCK_CACHE["val"]
+        return prev if prev is not None else default
+
+
 def place_order(symbol, qty, side, limit_price=None):
     """
     Place a buy or sell limit order. Returns Alpaca JSON on success or
