@@ -108,6 +108,27 @@ def test_test_report_parse_and_embed():
     embed, ok, total, passed, failed = test_report.build_embed(files)
     assert (total, passed, failed, ok) == (3, 2, 1, False)
     assert "2/3" in embed["title"] and embed["color"] == 0xe74c3c
+    # Summary embed: per-file line + inline failed-test list (no 6000-char field blowup).
+    assert "❌ test_a.py (1/2)" in embed["description"]
+    assert "test_a.py::test_two" in embed["description"]
+    assert "fields" not in embed                       # summary lives in description now
+
+    # Full attachment: complete per-test checklist + raw tail on failure.
+    full = test_report.build_full_report(files, sample)
+    assert "✅ test_one" in full and "❌ test_two" in full
+    assert "3 tests · pytest -v" in full
+    assert "raw pytest tail" in full                   # failures append raw output
+
+
+def test_test_report_full_report_all_green():
+    sample = ("tests/test_x.py::test_a PASSED [50%]\n"
+              "tests/test_x.py::test_b PASSED [100%]\n")
+    files = test_report.parse(sample)
+    embed, ok, total, passed, failed = test_report.build_embed(files)
+    assert ok and (total, passed, failed) == (2, 2, 0)
+    assert embed["color"] == 0x2ecc71 and "**Failed:**" not in embed["description"]
+    full = test_report.build_full_report(files, sample)
+    assert "raw pytest tail" not in full               # clean run = no noisy tail
 
 
 if __name__ == "__main__":
