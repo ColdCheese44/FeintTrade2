@@ -186,13 +186,13 @@ def test_execute_orders_rejects_inverse_etf_buy_in_bull(monkeypatch, tmp_path):
     events = []
     orders = orch._execute_orders(
         [{"symbol": "SOXS", "qty": 100, "side": "buy", "limit_price": 6.50,
-          "setup_type": "momentum_breakout", "conviction": 7, "score": 7,
+          "setup_type": "ema_vwap_cross", "conviction": 7, "score": 7,
           "reasoning": "fade the semis dip"}],
         account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
         positions=[],
         symbol_limits={"SOXS": 15},
         regime={"regime": "BULL", "multiplier": 1.0},
-        setup_types={"SOXS": "momentum_breakout"},
+        setup_types={"SOXS": "ema_vwap_cross"},
         collect_events=events,
     )
     assert not placed, "an inverse-ETF buy in BULL must never reach place_order"

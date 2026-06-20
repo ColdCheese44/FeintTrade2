@@ -73,9 +73,13 @@
     "trail_giveback_pct": 4.0,
     "require_momentum_confirmation": true,
     "setup_size_multiplier": {
-      "note": "Data-driven risk scaling per setup (code-enforced in _execute_orders, buys only). momentum_breakout is the entire realized drawdown (-$3,334 over 10 trades, ~10% WR) with losers sized larger than the bb_squeeze/ema_vwap winners — halve its size while it stays net-losing. Raise back to 1.0 if its win rate recovers. Setups not listed default to 1.0.",
+      "note": "Data-driven risk scaling per setup (code-enforced in _execute_orders, buys only). Setups not listed default to 1.0. NOTE: momentum_breakout is now fully blocked via disabled_setups (below), so its multiplier is moot until re-enabled.",
       "momentum_breakout": 0.5
     },
+    "disabled_setups": [
+      "momentum_breakout"
+    ],
+    "disabled_setups_note": "Code-enforced HARD BLOCK on new buys for these setups (_execute_orders). momentum_breakout was the ENTIRE realized drawdown: 10% WR over 10 trades, -$3,334, with losers sized larger than the bb_squeeze/ema_vwap winners. The learning engine escalates it to '🛑 STOP SETUP' but the model kept trading it from the prompt, so it is promoted to a guardrail. Sells/exits are never blocked. Remove a setup from this list once its win rate recovers to re-enable entries.",
     "profile": "aggressive — cut losers fast at -3% (unchanged); let winners run: trail still arms at +5% to protect gains, but partial is taken later (+10%) and the trail gives back 4% from peak (vs 3%) to ride bigger trends"
   },
 

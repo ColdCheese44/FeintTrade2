@@ -1142,6 +1142,36 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                 })
             continue
 
+        # ── Data-driven hard rule: block setups the track record says to STOP ──────
+        # learning.get_strategy_recommendations() escalates a dominant loss-source setup
+        # to "🛑 STOP SETUP", but that only reaches the model via the prompt — which it
+        # has repeatedly ignored (momentum_breakout: 10% WR over 10 trades, -$3,334, the
+        # ENTIRE realized drawdown). Promote the STOP to a code guardrail: any setup_type
+        # listed in trading_style.disabled_setups cannot open a new position. Proven
+        # setups (bb_squeeze_breakout, ema_vwap_cross) are unaffected. Sells are never
+        # blocked (de-risking). Re-enable by removing it from the config list.
+        if side == "buy":
+            try:
+                _disabled = {
+                    str(s).strip().lower()
+                    for s in (trading_style().get("disabled_setups", []) or [])
+                }
+            except (TypeError, ValueError, AttributeError):
+                _disabled = set()
+            if setup_type.lower() in _disabled:
+                msg = (f"BUY BLOCKED — setup '{setup_type}' is disabled (net-losing track "
+                       f"record; see learning STOP-SETUP recommendation). Use a proven setup "
+                       f"(bb_squeeze_breakout / ema_vwap_cross). Re-enable in "
+                       f"trading_style.disabled_setups once its win rate recovers.")
+                log.warning(msg)
+                print(f"  REJECTED (disabled-setup): {sym} — {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                    })
+                continue
+
         # ── SOP hard rule: no leveraged LONG ETFs in BEAR/PANIC (was prompt-only) ──
         if side == "buy" and _regime_blocks_leveraged_long(sym, regime.get("regime", "")):
             msg = (f"BUY BLOCKED — {sym} is a leveraged LONG ETF; not permitted in "

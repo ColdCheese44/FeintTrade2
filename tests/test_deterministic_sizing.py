@@ -104,11 +104,11 @@ def test_low_score_buy_is_hard_blocked(monkeypatch, tmp_path):
     events = []
     orch._execute_orders(
         [{"symbol": "NVDA", "qty": 50, "side": "buy", "limit_price": 100.0,
-          "setup_type": "momentum_breakout", "score": 2, "conviction": 2, "reasoning": "weak"}],
+          "setup_type": "ema_vwap_cross", "score": 2, "conviction": 2, "reasoning": "weak"}],
         account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
         positions=[], symbol_limits={"NVDA": 30},
         regime={"regime": "BULL", "multiplier": 1.0},
-        setup_types={"NVDA": "momentum_breakout"}, collect_events=events,
+        setup_types={"NVDA": "ema_vwap_cross"}, collect_events=events,
     )
     assert not placed, "a score-2 buy must never reach place_order"
     assert any(e["status"] == "rejected" and "below the minimum" in e["message"] for e in events)
@@ -120,11 +120,11 @@ def test_qualifying_score_buy_passes_low_score_gate(monkeypatch, tmp_path):
     orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
     orch._execute_orders(
         [{"symbol": "NVDA", "qty": 50, "side": "buy", "limit_price": 100.0,
-          "setup_type": "momentum_breakout", "score": 8, "conviction": 8, "reasoning": "strong"}],
+          "setup_type": "ema_vwap_cross", "score": 8, "conviction": 8, "reasoning": "strong"}],
         account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
         positions=[], symbol_limits={"NVDA": 30},
         regime={"regime": "BULL", "multiplier": 1.0},
-        setup_types={"NVDA": "momentum_breakout"}, collect_events=[],
+        setup_types={"NVDA": "ema_vwap_cross"}, collect_events=[],
     )
     assert placed and placed[0][0] == "NVDA"
 
@@ -139,13 +139,13 @@ def test_equity_buy_skipped_when_market_closed_crypto_allowed(monkeypatch, tmp_p
     events = []
     orch._execute_orders(
         [{"symbol": "NVDA", "qty": 10, "side": "buy", "limit_price": 100.0,
-          "setup_type": "momentum_breakout", "score": 8, "conviction": 8},
+          "setup_type": "ema_vwap_cross", "score": 8, "conviction": 8},
          {"symbol": "BTC/USD", "qty": 0.01, "side": "buy", "limit_price": 60000.0,
           "setup_type": "crypto_scored", "score": 8, "conviction": 8}],
         account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
         positions=[], symbol_limits={"NVDA": 30, "BTC/USD": 35},
         regime={"regime": "BULL", "multiplier": 1.0},
-        setup_types={"NVDA": "momentum_breakout", "BTC/USD": "crypto_scored"},
+        setup_types={"NVDA": "ema_vwap_cross", "BTC/USD": "crypto_scored"},
         collect_events=events,
     )
     placed_syms = [p[0] for p in placed]
@@ -153,6 +153,56 @@ def test_equity_buy_skipped_when_market_closed_crypto_allowed(monkeypatch, tmp_p
     assert "BTC/USD" in placed_syms                       # crypto still trades 24/7
     assert any(e["symbol"] == "NVDA" and e["status"] == "skipped" and "market is closed" in e["message"]
                for e in events)
+
+
+def test_disabled_setup_buy_is_hard_blocked(monkeypatch, tmp_path):
+    """A setup_type in trading_style.disabled_setups cannot open a new position, even
+    with a strong score. Promotes the learning STOP-SETUP recommendation to a guardrail
+    (momentum_breakout = the entire -$3,334 drawdown). Sells/proven setups unaffected."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
+    monkeypatch.setattr(orch, "trading_style",
+                        lambda: {"disabled_setups": ["momentum_breakout"]})
+    events = []
+    orch._execute_orders(
+        [{"symbol": "SOXL", "qty": 100, "side": "buy", "limit_price": 250.0,
+          "setup_type": "momentum_breakout", "score": 9, "conviction": 9}],
+        account={"equity": 1_000_000, "cash": 1_000_000, "last_equity": 1_000_000},
+        positions=[], symbol_limits={"SOXL": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"SOXL": "momentum_breakout"}, collect_events=events,
+    )
+    assert not placed, "a disabled-setup buy must never reach place_order"
+    assert any(e["status"] == "rejected" and "disabled" in e["message"].lower() for e in events)
+
+    # A proven setup is NOT blocked.
+    placed.clear()
+    orch._execute_orders(
+        [{"symbol": "FAS", "qty": 100, "side": "buy", "limit_price": 140.0,
+          "setup_type": "bb_squeeze_breakout", "score": 9, "conviction": 9}],
+        account={"equity": 1_000_000, "cash": 1_000_000, "last_equity": 1_000_000},
+        positions=[], symbol_limits={"FAS": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"FAS": "bb_squeeze_breakout"}, collect_events=[],
+    )
+    assert placed and placed[0][0] == "FAS"
+
+
+def test_real_config_disables_momentum_breakout(monkeypatch, tmp_path):
+    """The shipped watchlist.json must keep momentum_breakout disabled (it was the
+    entire realized drawdown). Guards against an accidental re-enable in config."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)  # uses REAL trading_style()
+    events = []
+    orch._execute_orders(
+        [{"symbol": "SOXL", "qty": 50, "side": "buy", "limit_price": 250.0,
+          "setup_type": "momentum_breakout", "score": 9, "conviction": 9}],
+        account={"equity": 1_000_000, "cash": 1_000_000, "last_equity": 1_000_000},
+        positions=[], symbol_limits={"SOXL": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"SOXL": "momentum_breakout"}, collect_events=events,
+    )
+    assert not placed, "real config must keep momentum_breakout blocked"
 
 
 def test_setup_size_multiplier_shrinks_losing_setup(monkeypatch, tmp_path):
