@@ -387,6 +387,10 @@ def ask_model(prompt: str, system_text: str, routine: str = "cycle") -> str:
                     "connection error",
                     "timeout",
                     "timed out",
+                    "internal server error",
+                    "api_error",
+                    "500",
+                    "502",
                     "503",
                     "529",
                 )
