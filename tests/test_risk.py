@@ -440,6 +440,30 @@ class TestPaperModeDailyStops:
         assert result["hard_stop"] is True
 
 
+class TestLimitOnly:
+    def test_place_order_rejects_missing_limit(self):
+        r = trade.place_order("NVDA", 10, "buy")
+        assert "error" in r and "Limit price required" in r["error"]
+
+    def test_place_order_rejects_zero_limit(self):
+        r = trade.place_order("NVDA", 10, "buy", 0)
+        assert "error" in r and "market orders are not permitted" in r["error"].lower() or "Limit price" in r["error"]
+
+    def test_place_order_accepts_limit(self, monkeypatch):
+        captured = {}
+
+        class _R:
+            status_code = 200
+            def json(self):
+                return {"id": "x", "status": "accepted"}
+
+        monkeypatch.setattr(trade._HTTP, "post", lambda *a, **k: (captured.update(k) or _R()))
+        r = trade.place_order("NVDA", 10, "buy", 100.5)
+        assert r.get("status") == "accepted"
+        assert captured["json"]["type"] == "limit"            # never market
+        assert captured["json"]["limit_price"] == "100.5"
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

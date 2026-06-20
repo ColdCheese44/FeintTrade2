@@ -72,6 +72,10 @@
     "trail_arm_pct": 5.0,
     "trail_giveback_pct": 4.0,
     "require_momentum_confirmation": true,
+    "setup_size_multiplier": {
+      "note": "Data-driven risk scaling per setup (code-enforced in _execute_orders, buys only). momentum_breakout is the entire realized drawdown (-$3,334 over 10 trades, ~10% WR) with losers sized larger than the bb_squeeze/ema_vwap winners — halve its size while it stays net-losing. Raise back to 1.0 if its win rate recovers. Setups not listed default to 1.0.",
+      "momentum_breakout": 0.5
+    },
     "profile": "aggressive — cut losers fast at -3% (unchanged); let winners run: trail still arms at +5% to protect gains, but partial is taken later (+10%) and the trail gives back 4% from peak (vs 3%) to ride bigger trends"
   },
 

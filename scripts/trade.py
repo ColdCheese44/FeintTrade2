@@ -93,16 +93,27 @@ def equities_open_now(ttl: int = 60, default=True) -> bool:
 
 def place_order(symbol, qty, side, limit_price=None):
     """
-    Place a buy or sell limit order. Returns Alpaca JSON on success or
+    Place a buy or sell LIMIT order. Returns Alpaca JSON on success or
     {"error": "..."} on failure without raising.
+
+    LIMIT-ONLY is a hard SOP rule. A missing/invalid limit price is rejected here at the
+    lowest layer rather than silently downgraded to a market order — so no caller (incl. the
+    `trade.py order` CLI) can ever submit a market order and breach the rule.
     """
+    try:
+        lp = float(limit_price) if limit_price is not None else 0.0
+    except (TypeError, ValueError):
+        lp = 0.0
+    if lp <= 0:
+        return {"error": "Limit price required — market orders are not permitted (limit-only SOP).",
+                "submitted": {"symbol": symbol, "qty": str(qty), "side": side}}
     crypto = is_crypto(symbol)
     order_symbol = normalize_symbol(symbol)
     order_data = {
         "symbol": order_symbol,
         "qty": str(qty),
         "side": side,
-        "type": "limit" if limit_price else "market",
+        "type": "limit",
         "time_in_force": "gtc" if crypto else "day",
     }
     if limit_price:

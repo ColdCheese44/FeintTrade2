@@ -155,6 +155,36 @@ def test_equity_buy_skipped_when_market_closed_crypto_allowed(monkeypatch, tmp_p
                for e in events)
 
 
+def test_setup_size_multiplier_shrinks_losing_setup(monkeypatch, tmp_path):
+    """trading_style.setup_size_multiplier shrinks a historically-losing setup before the
+    clamps. momentum_breakout 0.5 -> a 100-share buy becomes 50 (data-driven risk scaling)."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
+    monkeypatch.setattr(orch, "trading_style",
+                        lambda: {"setup_size_multiplier": {"momentum_breakout": 0.5}})
+    orch._execute_orders(
+        [{"symbol": "SOXL", "qty": 100, "side": "buy", "limit_price": 250.0,
+          "setup_type": "momentum_breakout", "score": 8, "conviction": 8}],
+        account={"equity": 1_000_000, "cash": 1_000_000, "last_equity": 1_000_000},
+        positions=[], symbol_limits={"SOXL": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"SOXL": "momentum_breakout"}, collect_events=[],
+    )
+    assert placed and abs(placed[0][1] - 50.0) < 1e-6      # 100 × 0.5
+
+    # A setup NOT in the map is unscaled.
+    placed.clear()
+    orch._execute_orders(
+        [{"symbol": "FAS", "qty": 100, "side": "buy", "limit_price": 140.0,
+          "setup_type": "bb_squeeze_breakout", "score": 8, "conviction": 8}],
+        account={"equity": 1_000_000, "cash": 1_000_000, "last_equity": 1_000_000},
+        positions=[], symbol_limits={"FAS": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"FAS": "bb_squeeze_breakout"}, collect_events=[],
+    )
+    assert placed and abs(placed[0][1] - 100.0) < 1e-6     # unlisted -> 1.0
+
+
 def test_oversized_model_buy_is_clamped_not_placed(monkeypatch, tmp_path):
     placed = []
     orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
@@ -187,15 +217,17 @@ def test_full_conviction_order_not_reduced(monkeypatch, tmp_path):
     placed = []
     orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
 
+    # Isolate the conviction clamp from the setup-size multiplier (use a setup with mult 1.0).
+    monkeypatch.setattr(orch, "trading_style", lambda: {})
     # 20% of 100k at $100 = 200 shares, exactly the conviction-1.0 allocation for a 20% cap.
     orch._execute_orders(
         [{"symbol": "PLTR", "qty": 200, "side": "buy", "limit_price": 100.0,
-          "setup_type": "momentum_breakout", "score": 9}],
+          "setup_type": "ema_vwap_cross", "score": 9}],
         account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
         positions=[],
         symbol_limits={"PLTR": 20},
         regime={"regime": "BULL", "multiplier": 1.0},
-        setup_types={"PLTR": "momentum_breakout"},
+        setup_types={"PLTR": "ema_vwap_cross"},
         collect_events=[],
     )
     assert placed and abs(placed[0][1] - 200) < 1e-6, \

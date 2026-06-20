@@ -1213,11 +1213,23 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
             continue
 
         if side == "buy":
+            # Per-setup risk multiplier (data-driven; trading_style.setup_size_multiplier).
+            # Shrinks historically-losing setups (e.g. momentum_breakout = the entire realized
+            # drawdown) before regime/live scaling. Unlisted setups default to 1.0 (no change).
+            setup_mult = 1.0
+            try:
+                _sm = trading_style().get("setup_size_multiplier", {}) or {}
+                setup_mult = float(_sm.get(setup_type, 1.0) or 1.0)
+            except (TypeError, ValueError):
+                setup_mult = 1.0
+            scale = multiplier * live_scale * setup_mult
             # Options trade in WHOLE contracts; equities/crypto can be fractional.
             if is_option(sym):
-                qty = int(qty * multiplier * live_scale)
+                qty = int(qty * scale)
             else:
-                qty = round(qty * multiplier * live_scale, 8)
+                qty = round(qty * scale, 8)
+            if setup_mult != 1.0:
+                log.info(f"Setup-size multiplier {setup_mult:g} applied to {sym} ({setup_type}) buy")
             if qty <= 0:
                 print(f"  SKIP {sym}: scaling produced zero qty")
                 if collect_events is not None:
