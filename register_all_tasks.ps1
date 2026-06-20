@@ -19,6 +19,10 @@
 #    17:00  Claude Weekly Review (opus)   Sunday    deep strategy analysis + tuning + recommendations
 #    boot   Discord bot (auto-restart)    starts at STARTUP, headless
 #
+#  AT LOGON: in ADDITION to the schedules above, EVERY task also fires when you log in
+#  (a startup self-test of the whole stack). Multiple processes may run at once on login;
+#  MultipleInstances='IgnoreNew' prevents a logon run from colliding with a scheduled one.
+#
 #  The flow is research -> synthesis(journal) -> decisions, by design.
 #
 #  HEADLESS: every task runs whether or not you are signed in and survives reboots
@@ -62,8 +66,16 @@ function Register-MhTask {
         [string]$Bat,
         [Microsoft.Management.Infrastructure.CimInstance[]]$Triggers,
         [string]$Desc,
-        [int]$LimitMinutes = 12
+        [int]$LimitMinutes = 12,
+        [switch]$NoLogonTrigger   # set for tasks that already include an AtLogon trigger
     )
+    # ALSO start every task at user logon (in addition to its schedule) — a startup
+    # self-test of the whole stack. MultipleInstances='IgnoreNew' keeps a logon-launched run
+    # from colliding with a scheduled one. The Discord bot already has its own AtLogon, so it
+    # opts out (-NoLogonTrigger) to avoid a duplicate trigger.
+    if (-not $NoLogonTrigger) {
+        $Triggers = @($Triggers) + (New-ScheduledTaskTrigger -AtLogOn -User $User)
+    }
     $action = New-ScheduledTaskAction -Execute "$Root\$Bat" -WorkingDirectory $Root
     # Resilient + reboot-proof: catch up missed runs, no duplicate instances, restart on
     # failure, and ignore battery state so a crash / power blip / reboot self-heals headless.
@@ -182,7 +194,7 @@ Register-MhTask "Trading - Claude Maintenance" "run_claude_maintenance.bat" `
 # belt-and-suspenders second trigger (IgnoreNew prevents a duplicate instance).
 Register-MhTask "Trading - Discord Bot" "run_bot.bat" `
     @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -AtLogOn -User $User)) `
-    "Discord bot (auto-restart loop, headless at startup)" 0
+    "Discord bot (auto-restart loop, headless at startup)" 0 -NoLogonTrigger
 
 Write-Host ""
 Write-Host "All tasks registered. View them with:  schtasks /query /tn ""Trading - *"""

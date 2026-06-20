@@ -23,5 +23,7 @@ echo ===== [%date% %time%] Weekly deep review starting via "%CLAUDE%" =====>> "%
 if not defined CLAUDE_WEEKLY_MODEL set "CLAUDE_WEEKLY_MODEL=opus"
 type "%PROMPT_FILE%" | "%CLAUDE%" -p --dangerously-skip-permissions --model %CLAUDE_WEEKLY_MODEL% >> "%LOG%" 2>&1
 set "RC=%errorlevel%"
+:: Always post the full test-suite result (per-test pass/fail) to #ft-dev-log.
+python -c "import sys; sys.path.insert(0,'scripts'); import test_report; test_report.post_report(do_post=True)" >> "%LOG%" 2>&1
 echo ===== [%date% %time%] Weekly deep review finished (exit %RC%) =====>> "%LOG%"
 endlocal & exit /b %RC%

@@ -29,5 +29,8 @@ echo ===== [%date% %time%] Daily maintenance starting via "%CLAUDE%" =====>> "%L
 if not defined CLAUDE_MODEL set "CLAUDE_MODEL=sonnet"
 type "%PROMPT_FILE%" | "%CLAUDE%" -p --dangerously-skip-permissions --model %CLAUDE_MODEL% >> "%LOG%" 2>&1
 set "RC=%errorlevel%"
+:: Always post the full test-suite result (per-test pass/fail) to #ft-dev-log so every
+:: debug run is visible, regardless of what the maintenance pass did.
+python -c "import sys; sys.path.insert(0,'scripts'); import test_report; test_report.post_report(do_post=True)" >> "%LOG%" 2>&1
 echo ===== [%date% %time%] Daily maintenance finished (exit %RC%) =====>> "%LOG%"
 endlocal & exit /b %RC%
