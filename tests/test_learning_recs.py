@@ -45,6 +45,15 @@ def test_mild_loss_stays_advisory(monkeypatch):
     assert "📉 WORST SETUP: 'vwap_bounce'" in out
 
 
+def test_recommendations_utf8_safe(monkeypatch):
+    # Regression: output must encode to UTF-8 without error (Windows cp1252 guard).
+    trades = [_trade("momentum_breakout", -300, "loss") for _ in range(6)]
+    monkeypatch.setattr(learning, "_load_trade_log", lambda: trades)
+    out = learning.get_strategy_recommendations()
+    assert isinstance(out, str)
+    out.encode('utf-8')  # must not raise
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

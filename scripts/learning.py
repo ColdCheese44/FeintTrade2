@@ -797,6 +797,9 @@ def get_completed_trade_count() -> int:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Prevent UnicodeEncodeError on Windows cp1252 consoles when output contains emoji.
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
     cmd = sys.argv[1] if len(sys.argv) > 1 else "brief"
     if cmd == "brief":
         print(get_performance_brief())

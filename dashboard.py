@@ -243,6 +243,12 @@ html, body, [data-testid="stAppViewContainer"] {
 .badge-yellow{ color: #fbbf24; font-weight: 700; }
 .badge-blue  { color: #60a5fa; font-weight: 700; }
 .mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ── Kill the big default top gap (Streamlit chrome is hidden, but its padding stays) ── */
+[data-testid="stMain"] .block-container,
+[data-testid="stAppViewContainer"] .block-container {
+  padding-top: 0.8rem !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -591,6 +597,21 @@ def render_tickers():
 
 def render_alerts_ticker():
     alerts = []
+    # Market-status alert FIRST (holiday/weekend/closed), via the broker clock.
+    try:
+        if not get_market_status().get("is_open"):
+            _n = now_mt()
+            if _n.weekday() >= 5:
+                _why = "Weekend"
+            elif market_phase() == "REGULAR":
+                _why = _US_HOLIDAYS.get((_n.month, _n.day), "Holiday")
+            elif market_phase() in ("PRE_MARKET", "AFTER_HOURS"):
+                _why = market_phase().replace("_", " ").title()
+            else:
+                _why = "Closed"
+            alerts.append(("🔴 MARKET CLOSED", f"{_why} — equities halted, crypto trades 24/7", "#ff4d6d"))
+    except Exception:
+        pass
     try:
         fg = get_fear_greed()
         score = fg.get("score")
@@ -1413,9 +1434,64 @@ def render_orders_table(orders):
 </div>
 """, unsafe_allow_html=True)
 
+# ─── MARKET STATUS BANNER ────────────────────────────────────────────────────
+# Minimal fixed-date US market holidays so a closed weekday can be NAMED. Floating
+# holidays (Thanksgiving, etc.) fall back to a generic "Market Holiday".
+_US_HOLIDAYS = {
+    (1, 1): "New Year's Day", (6, 19): "Juneteenth",
+    (7, 4): "Independence Day", (12, 25): "Christmas Day",
+}
+
+def render_market_status():
+    """Holiday-aware market-state banner. Uses the Alpaca clock (authoritative on holidays),
+    not just the time-based phase — so it correctly shows e.g. 'MARKET CLOSED — Juneteenth'."""
+    try:
+        clock = get_market_status()
+        is_open = bool(clock.get("is_open"))
+    except Exception:
+        clock, is_open = {}, None
+    n = now_mt()
+    tz = mt_tz_label()
+    phase = market_phase()
+
+    if is_open:
+        mins = minutes_to_close() or 0
+        h, m = divmod(mins, 60)
+        icon, color, head, sub = "🟢", "#00d4aa", "MARKET OPEN", f"{h}h {m:02d}m to close (2:00 PM {tz}) · crypto 24/7"
+    elif phase == "PRE_MARKET":
+        icon, color, head, sub = "🟡", "#fbbf24", "PRE-MARKET", f"equities open 7:30 AM {tz} · crypto 24/7"
+    elif phase == "AFTER_HOURS":
+        icon, color, head, sub = "🟡", "#fbbf24", "AFTER-HOURS", f"extended close 6:00 PM {tz} · crypto 24/7"
+    else:
+        if n.weekday() >= 5:
+            reason = "Weekend"
+        elif phase == "REGULAR":          # would-be trading hours but broker says closed → holiday
+            reason = _US_HOLIDAYS.get((n.month, n.day), "Market Holiday")
+        else:
+            reason = "Overnight"
+        nxt = ""
+        try:
+            no = clock.get("next_open")
+            if no:
+                no_dt = datetime.fromisoformat(no.replace("Z", "+00:00")).astimezone(n.tzinfo)
+                nxt = f" · reopens {no_dt.strftime('%a %b %d')} 7:30 AM {tz}"
+        except Exception:
+            pass
+        icon, color, head, sub = "🔴", "#ff4d6d", f"MARKET CLOSED — {reason}", f"equities halted · crypto trades 24/7{nxt}"
+
+    st.markdown(f"""
+<div style="display:flex;align-items:center;gap:14px;background:linear-gradient(90deg,{color}1f,transparent);
+  border:1px solid {color}55;border-left:4px solid {color};border-radius:10px;padding:10px 18px;margin-bottom:10px">
+  <span style="font-size:1.35rem">{icon}</span>
+  <span style="color:{color};font-weight:800;font-size:0.98rem;letter-spacing:0.04em">{head}</span>
+  <span style="color:#94a3b8;font-size:0.82rem;font-family:'JetBrains Mono',monospace">{sub}</span>
+</div>""", unsafe_allow_html=True)
+
+
 # ─── MAIN APP ─────────────────────────────────────────────────────────────────
 
-# Tickers at top
+# Market status banner (fills the top; holiday-aware) + tickers
+render_market_status()
 render_tickers()
 render_alerts_ticker()
 
