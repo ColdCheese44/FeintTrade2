@@ -370,6 +370,72 @@ def log_exit(
     return trade
 
 
+def reconcile_untracked_positions(current_positions: list) -> list:
+    """
+    Reverse reconciliation: backfill a tracked entry for any position HELD at the
+    broker but ABSENT from open_trades.json.
+
+    detect_and_log_exits() only handles the tracked→held direction (a tracked lot
+    that closed/shrank). The opposite — a live position that was never tracked
+    (its entry was opened via a path that skipped log_entry, or it is a residual
+    after a logged exit) — is invisible to the learning loop. Its eventual close
+    then logs as a context-free "reconstructed" exit (setup_type/regime/entry
+    lost), so the setup-level stats that drive strategy under-count the real book.
+
+    Anchor a tracked entry from broker truth (avg_entry_price + live qty) tagged
+    setup_type="reconstructed_entry" so the exit attributes cleanly with correct
+    P&L. timestamp_entry is set to now (the true entry time is unknown), so
+    hold-time for these is approximate — `reconstructed: True` flags that. Real
+    entries always log richer context at the point of purchase; this only catches
+    the few that slip through. Returns the list of backfilled symbols.
+    """
+    if not current_positions:
+        return []
+    open_trades = _load_open_trades()
+    backfilled = []
+    for p in current_positions:
+        sym = normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
+        if not sym or sym in open_trades:
+            continue
+        try:
+            qty = abs(float(p.get("qty", 0) or 0))
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty <= 0:
+            continue
+        try:
+            px = float(p.get("avg_entry_price", 0) or p.get("entry_price", 0) or 0)
+        except (TypeError, ValueError):
+            px = 0.0
+        if px <= 0:
+            px = _last_fill_price(sym) or 0.0
+        if px <= 0:
+            continue  # can't anchor an entry without a price
+        open_trades[sym] = {
+            "trade_id":        f"{sym.replace('/','')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_recon",
+            "symbol":          sym,
+            "side":            "buy",
+            "qty":             qty,
+            "entry_price":     px,
+            "setup_type":      "reconstructed_entry",
+            "conviction":      None,
+            "signals":         {},
+            "market_regime":   "UNKNOWN",
+            "vix":             None,
+            "asset_type":      _classify_asset(sym),
+            "time_of_day":     _time_of_day(),
+            "day_of_week":     datetime.now().strftime("%A"),
+            "timestamp_entry": datetime.now().isoformat(),
+            "scale_ins":       0,
+            "notes":           "backfilled from broker — held but untracked (entry log skipped/residual)",
+            "reconstructed":   True,
+        }
+        backfilled.append(sym)
+    if backfilled:
+        _save_open_trades(open_trades)
+    return backfilled
+
+
 def detect_and_log_exits(current_positions: list, exit_reason: str = "eod_close",
                          price_lookup: dict = None) -> list:
     """

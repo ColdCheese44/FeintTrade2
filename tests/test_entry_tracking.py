@@ -142,6 +142,50 @@ def test_forget_without_positions_arg_removes_buy(L):
     assert "SOL/USD" not in L._load_open_trades()
 
 
+# ── 3b. Reverse reconciliation: held-but-untracked positions are backfilled ────
+
+def test_reconcile_backfills_untracked_position(L):
+    """A position HELD at the broker but absent from open_trades.json (entry log
+    skipped, or a residual) is backfilled so its eventual exit attributes cleanly
+    instead of logging a context-free 'reconstructed' exit."""
+    poss = [{"symbol": "SOXL", "qty": 21.6, "avg_entry_price": 277.30, "asset_class": "us_equity"}]
+    backfilled = L.reconcile_untracked_positions(poss)
+    assert backfilled == ["SOXL"]
+    ot = L._load_open_trades()
+    assert "SOXL" in ot
+    assert ot["SOXL"]["entry_price"] == 277.30
+    assert ot["SOXL"]["setup_type"] == "reconstructed_entry"
+    assert ot["SOXL"]["reconstructed"] is True
+    assert abs(float(ot["SOXL"]["qty"]) - 21.6) < 1e-9
+
+
+def test_reconcile_leaves_tracked_positions_untouched(L):
+    """A symbol already tracked is not overwritten or duplicated by the backfill."""
+    L.log_entry("AMD", "buy", 23.4, 532.9, setup_type="ema_vwap_cross", conviction=6)
+    poss = [{"symbol": "AMD", "qty": 23.4, "avg_entry_price": 999.0, "asset_class": "us_equity"}]
+    backfilled = L.reconcile_untracked_positions(poss)
+    assert backfilled == []
+    ot = L._load_open_trades()
+    assert ot["AMD"]["setup_type"] == "ema_vwap_cross"   # original preserved
+    assert ot["AMD"]["entry_price"] == 532.9             # NOT overwritten by broker avg
+
+
+def test_reconcile_skips_position_without_price(L):
+    """Without an anchorable entry price (no avg_entry_price and no recent fill),
+    a backfill is skipped rather than fabricating a 0-cost entry."""
+    poss = [{"symbol": "NVDA", "qty": 5, "asset_class": "us_equity"}]  # no price field
+    backfilled = L.reconcile_untracked_positions(poss)
+    assert backfilled == []
+    assert "NVDA" not in L._load_open_trades()
+
+
+def test_reconcile_empty_positions_is_noop(L):
+    """An empty/failed snapshot must never mutate tracking (mirrors the exit-side guard)."""
+    L.log_entry("BTC/USD", "buy", 0.5, 60000, setup_type="crypto_scored")
+    assert L.reconcile_untracked_positions([]) == []
+    assert "BTC/USD" in L._load_open_trades()
+
+
 # ── 4. Orchestrator wiring: cancel_stale_orders → forget_unfilled_entry ────────
 
 def test_orchestrator_cancel_stale_reconciles_orphan(L, monkeypatch):

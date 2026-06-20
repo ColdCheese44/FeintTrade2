@@ -191,20 +191,37 @@ def _reconcile_learning(r, positions, fix):
         open_trades = learning._load_open_trades()
     except Exception:
         return
-    held = {p["symbol"] for p in positions}
+    norm = getattr(learning, "normalize_symbol", lambda s, *a: s)
+    held = {norm(p.get("symbol", ""), p.get("asset_class")) for p in positions if p.get("symbol")}
     stale = [s for s in open_trades if s not in held]
+    # Orphans: HELD at the broker but never tracked. detect_and_log_exits only
+    # handles the other direction, so without this their eventual close logs as a
+    # context-free "reconstructed" exit and the learning loop under-counts the book.
+    untracked = [s for s in held if s not in open_trades]
+    did_fix = False
     if stale and fix:
         closed = learning.detect_and_log_exits(positions, "diagnostic_reconcile")
         if closed:
             r.fix(f"Reconciled learning log — recorded exits for: {', '.join(closed)}")
+            did_fix = True
+    if untracked and fix:
+        backfilled = learning.reconcile_untracked_positions(positions)
+        if backfilled:
+            r.fix(f"Backfilled untracked live positions into learning log: {', '.join(backfilled)}")
+            did_fix = True
+    if did_fix:
         try:
             learning.update_performance()
             r.fix("Refreshed performance.json cache")
         except Exception:
             pass
-    elif stale:
-        r.warning(f"Learning log has {len(stale)} tracked symbols no longer held (run --fix)")
-    else:
+    if not fix and (stale or untracked):
+        if stale:
+            r.warning(f"Learning log has {len(stale)} tracked symbols no longer held (run --fix)")
+        if untracked:
+            r.warning(f"Learning log missing {len(untracked)} held position(s): "
+                      f"{', '.join(untracked)} (untracked at broker — run --fix)")
+    elif not stale and not untracked:
         r.good("Learning log in sync with live positions")
 
 
