@@ -521,10 +521,70 @@ def detect_and_log_exits(current_positions: list, exit_reason: str = "eod_close"
 
 # ── Performance stats ─────────────────────────────────────────────────────────
 
+def _collapse_to_positions(trades: list) -> list:
+    """Collapse partial-exit rows into one record per position (by trade_id).
+
+    The trade log appends one row per (partial) exit, so a single scaled-out
+    position becomes many rows — counting each as a separate "trade" inflates
+    win rate and trade counts (a 1-position FAS scale-out read as "7 trades,
+    100% WR"; a 3-tranche SOXS loss read as 3 losses). Performance stats and
+    recommendations must be position-level: one round-trip = one trade.
+
+    Rows are grouped by trade_id; dollar P&L sums, percent P&L is
+    notional-weighted across tranches (entry_price x qty, x100 for options),
+    the outcome is recomputed from the net (same +/-0.05% bands as log_exit),
+    and hold time is the longest tranche. Rows without a trade_id (legacy or
+    stubbed) each stand alone, so existing behavior is preserved. Chronological
+    order (by final exit timestamp) is kept for streak/recent-N logic.
+    """
+    groups, standalone = {}, []
+    order = []
+    for t in trades:
+        tid = t.get("trade_id")
+        if not tid:
+            standalone.append([t])
+            continue
+        if tid not in groups:
+            groups[tid] = []
+            order.append(tid)
+        groups[tid].append(t)
+
+    positions = []
+    for rows in [groups[tid] for tid in order] + standalone:
+        if len(rows) == 1:
+            positions.append(rows[0])
+            continue
+        rows_sorted = sorted(rows, key=lambda r: r.get("timestamp_exit") or "")
+        last = rows_sorted[-1]
+        net_dollar = sum(r.get("pnl_dollar", 0) or 0 for r in rows_sorted)
+        mult = OPTION_CONTRACT_MULTIPLIER if is_option(last.get("symbol", "")) else 1
+        notional = sum((r.get("entry_price", 0) or 0) * (r.get("qty", 0) or 0) * mult
+                       for r in rows_sorted)
+        net_pct = (round(net_dollar / notional * 100, 3) if notional
+                   else round(sum(r.get("pnl_pct", 0) or 0 for r in rows_sorted), 3))
+        outcome = "win" if net_pct > 0.05 else "loss" if net_pct < -0.05 else "breakeven"
+        positions.append({
+            **last,
+            "pnl_dollar":   round(net_dollar, 2),
+            "pnl_pct":      net_pct,
+            "outcome":      outcome,
+            "partial":      False,
+            "hold_minutes": max((r.get("hold_minutes", 0) or 0) for r in rows_sorted),
+            "tranches":     len(rows_sorted),
+        })
+
+    positions.sort(key=lambda p: p.get("timestamp_exit") or "")
+    return positions
+
+
 def compute_stats(trades: list = None) -> dict:
-    """Full performance statistics from the trade log."""
+    """Full performance statistics from the trade log (position-level)."""
     if trades is None:
         trades = _load_trade_log()
+
+    # Collapse partial-exit rows so one scaled-out position counts as one trade,
+    # not one trade per tranche (see _collapse_to_positions).
+    trades = _collapse_to_positions(trades)
 
     completed = [t for t in trades if t.get("outcome") and t.get("pnl_pct") is not None]
     if not completed:
@@ -800,8 +860,13 @@ def get_strategy_recommendations() -> str:
 # ── Loss-streak lockout helpers ──────────────────────────────────────────────
 
 def get_loss_streak() -> dict:
-    """Return current streak info: {'count': N, 'type': 'loss'|'win'|'none'}."""
-    trades = _load_trade_log()
+    """Return current streak info: {'count': N, 'type': 'loss'|'win'|'none'}.
+
+    Position-level: a scaled-out winner/loser is one streak entry, not one per
+    partial-exit tranche (otherwise the loss-streak lockout could trip on the
+    partials of a single losing position).
+    """
+    trades = _collapse_to_positions(_load_trade_log())
     completed = [t for t in trades if t.get("outcome") in ("win", "loss")]
     streak, stype = 0, "none"
     for t in reversed(completed):
