@@ -339,7 +339,7 @@ def log_exit(
         pnl_dollar = (entry_price - exit_price) * sell_qty * mult
         pnl_pct    = (entry_price - exit_price) / entry_price * 100 if entry_price else 0
 
-    outcome = "win" if pnl_pct > 0.3 else "loss" if pnl_pct < -0.3 else "breakeven"
+    outcome = "win" if pnl_pct > 0.05 else "loss" if pnl_pct < -0.05 else "breakeven"
     partial = sell_qty < held - 1e-9
 
     canonical_reason = _normalize_exit_reason(exit_reason)
@@ -779,16 +779,16 @@ def get_strategy_recommendations() -> str:
     sym_perf = stats.get("by_symbol", {})
     if sym_perf:
         sorted_syms = sorted(sym_perf.items(), key=lambda x: x[1]["total_pnl"], reverse=True)
-        if sorted_syms[0][1]["trades"] >= 2:
+        if sorted_syms[0][1]["trades"] >= 4 and sorted_syms[0][1]["total_pnl"] > 0:
             recs.append(f"📈 BEST SYMBOL: {sorted_syms[0][0]} — {sorted_syms[0][1]['win_rate']}% WR. Consider higher allocation within rules.")
-        if sorted_syms[-1][1]["total_pnl"] < -200 and sorted_syms[-1][1]["trades"] >= 2:
+        if sorted_syms[-1][1]["total_pnl"] < -200 and sorted_syms[-1][1]["trades"] >= 4:
             recs.append(f"📉 WORST SYMBOL: {sorted_syms[-1][0]} — losing. Avoid or reduce to min size until pattern improves.")
 
     # Best time of day
     tod_perf = stats.get("by_time_of_day", {})
     if tod_perf:
         best_tod = max(tod_perf.items(), key=lambda x: x[1]["win_rate"])
-        if best_tod[1]["trades"] >= 3:
+        if best_tod[1]["trades"] >= 3 and best_tod[1]["total_pnl"] > 0:
             recs.append(f"⏰ BEST TIME: '{best_tod[0]}' has {best_tod[1]['win_rate']}% WR — prioritize entries in this window.")
 
     if len(recs) == 1:
