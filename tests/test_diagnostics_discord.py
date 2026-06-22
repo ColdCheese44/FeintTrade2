@@ -36,10 +36,16 @@ def test_discord_403_fails_diagnostics_and_explains_webhook_limit(monkeypatch):
     monkeypatch.setattr(
         diagnostics,
         "dch",
-        types.SimpleNamespace(health_check=lambda: _health("http 403", "http 403")),
+        types.SimpleNamespace(
+            health_check=lambda: _health("http 403", "http 403"),
+            display_channel_name=lambda name: (
+                "command-center" if name == "command_post" else name.replace("_", "-")
+            ),
+        ),
     )
     report = diagnostics.Report()
     diagnostics._check_discord_delivery(report)
     assert any("commands cannot be received" in item for item in report.fail)
     assert any("multichannel routing is degraded" in item for item in report.fail)
+    assert any("#command-center" in item for item in report.fail)
     assert any("webhook fallback" in item.lower() for item in report.warn)

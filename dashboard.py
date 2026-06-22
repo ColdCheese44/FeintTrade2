@@ -1985,6 +1985,9 @@ with tab_discord:
     if _dch is None:
         st.error("discord_channels module unavailable — check scripts/ on the path.")
     else:
+        display_channel = getattr(
+            _dch, "display_channel_name", lambda name: name.replace("_", "-")
+        )
         try:
             hc = _dch.health_check()
         except Exception as e:
@@ -2000,7 +2003,7 @@ with tab_discord:
             reach = hc.get("reachability", {})
             purpose = getattr(_dch, "_PURPOSE", {})
             rows = [{
-                "Channel": f"#{name.replace('_', '-')}",
+                "Channel": f"#{display_channel(name)}",
                 "Purpose": purpose.get(name, "—"),
                 "Configured": "✓" if configured else "✗",
                 "Reachable": reach.get(name, "—"),
@@ -2033,7 +2036,7 @@ with tab_discord:
                 (st.success if ok == len(results) else st.warning)(
                     f"Delivered to {ok}/{len(results)} channels.")
                 rr = [{
-                    "Channel": f"#{k.replace('_', '-')}",
+                    "Channel": f"#{display_channel(k)}",
                     "Delivered": "✓" if v.get("ok") else "✗",
                     "Detail": v.get("detail", "") or v.get("channel_id", ""),
                 } for k, v in results.items()]
@@ -2068,7 +2071,7 @@ with tab_discord:
         st.markdown('<div class="mh-card-title">◈ DISCORD FEED</div>', unsafe_allow_html=True)
         _chans = list(getattr(_dch, "_CHANNEL_ENV", {}).keys()) if _dch else []
         if _chans:
-            _fc = st.selectbox("Channel", _chans, format_func=lambda n: f"#{n.replace('_', '-')}",
+            _fc = st.selectbox("Channel", _chans, format_func=lambda n: f"#{display_channel(n)}",
                                key="discord_feed_channel")
             _msgs = _discord_feed(_fc, 6)
             if _msgs:

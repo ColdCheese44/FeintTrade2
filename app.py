@@ -16,9 +16,10 @@ ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env", override=True)
 
 SERVER_ID   = os.getenv("DISCORD_SERVER_ID", "")
-# Open the operator's primary channel — ft-command-post (where the bot listens and the
-# per-routine !status pulse posts). Fall back to the legacy channel id for older configs.
-CHANNEL_ID  = (os.getenv("DISCORD_CH_COMMAND_POST")
+# Open the operator's primary channel — ft-command-center (where the bot listens and the
+# per-routine !status pulse posts). Fall back to legacy variable names for older configs.
+CHANNEL_ID  = (os.getenv("DISCORD_CH_COMMAND_CENTER")
+               or os.getenv("DISCORD_CH_COMMAND_POST")
                or os.getenv("DISCORD_MINDHUB_CHANNEL_ID", ""))
 DISCORD_URL = f"https://discord.com/channels/{SERVER_ID}/{CHANNEL_ID}"
 ALPACA_URL  = "https://app.alpaca.markets/paper/dashboard/overview"
@@ -215,7 +216,7 @@ iframe {
   <span class="logo">📈 FEINTTRADE</span>
   <div class="tabs">
     <button class="tab active" id="tab-dash" onclick="activateTab('dash')">Dashboard</button>
-    <button class="tab" id="tab-discord" onclick="openDiscord()">Discord/Alpaca</button>
+    <button class="tab" id="tab-discord" onclick="openDiscord()">Command Center/Alpaca</button>
   </div>
   <div class="status-dot" title="Agent running"></div>
 </div>

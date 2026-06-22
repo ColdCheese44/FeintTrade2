@@ -530,14 +530,14 @@ def cmd_channels():
     hc = dch.health_check()
     reach = hc.get("reachability", {})
     purpose = getattr(dch, "_PURPOSE", {})
-    head = (f"**Discord Channels** — multichannel "
+    head = (f"**FeintTrade Command Center** — multichannel "
             f"{'🟢 ON' if hc.get('multichannel_enabled') else '🔴 OFF'} · "
             f"bot {'✓' if hc.get('bot_token_present') else '✗'}")
     lines = [head]
     for name in hc.get("channels", {}):
         r = reach.get(name, "—")
         icon = "🟢" if r == "ok" else ("⚪" if r == "unconfigured" else "🔴")
-        lines.append(f"{icon} `#{name.replace('_', '-')}` — {purpose.get(name, '')}")
+        lines.append(f"{icon} `#{dch.display_channel_name(name)}` — {purpose.get(name, '')}")
     return "\n".join(lines)
 
 
@@ -553,12 +553,12 @@ def cmd_test():
     for name, r in results.items():
         icon = "✅" if r.get("ok") else "❌"
         detail = "" if r.get("ok") else f" ({r.get('detail', 'fail')})"
-        lines.append(f"{icon} #{name.replace('_', '-')}{detail}")
+        lines.append(f"{icon} #{dch.display_channel_name(name)}{detail}")
     return "\n".join(lines)
 
 
 def cmd_summary():
-    """Market / regime summary (the #ft-command-post headline, on demand)."""
+    """Market / regime summary (the #ft-command-center headline, on demand)."""
     reg = run("regime.py", "detect")
     if not isinstance(reg, dict) or not reg.get("regime"):
         return "Could not detect the market regime right now."

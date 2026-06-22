@@ -335,8 +335,9 @@ def _check_discord_delivery(r):
         return
 
     command_state = reach.get("command_post", "unconfigured")
+    display_name = getattr(dch, "display_channel_name", lambda name: name.replace("_", "-"))
     details = ", ".join(
-        f"#{name.replace('_', '-')} ({reach.get(name, 'unknown')})" for name in failed
+        f"#{display_name(name)} ({reach.get(name, 'unknown')})" for name in failed
     )
     if command_state != "ok":
         r.error("Discord command channel is inaccessible to the bot "

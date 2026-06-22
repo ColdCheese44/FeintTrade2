@@ -1,9 +1,9 @@
 """
-Command-post status snapshot — FeintTrade.
+Command-center status snapshot — FeintTrade.
 Run: python -m pytest tests/test_status_update.py -v
 
 discord_notify.status_update() posts the !status info (equity, day P&L, cash, positions,
-market/kill state) to #ft-command-post after every routine. Hermetic: transport + Alpaca
+market/kill state) to #ft-command-center after every routine. Hermetic: transport + Alpaca
 fetchers are stubbed, kill-flag dir is redirected to tmp.
 """
 

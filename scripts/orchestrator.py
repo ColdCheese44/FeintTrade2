@@ -671,7 +671,7 @@ def get_positions_norm():
     pos = safe_run("research.py", "positions")
     return normalize_positions(pos) if isinstance(pos, list) else []
 
-# Routines that post a !status snapshot to #ft-command-post when they finish (every
+# Routines that post a !status snapshot to #ft-command-center when they finish (every
 # cycle/trade/research/etc.). Utility routines (report/usage/validate-models) are excluded.
 _STATUS_ROUTINES = {"research", "trading", "intraday", "cycle",
                     "eod", "afterhours", "marketopen", "crypto"}
@@ -778,7 +778,7 @@ def _notify_decision_executed(routine: str, payload: dict,
 def _notify_research_outputs(analysis: str, ctx: dict, regime: dict | None = None):
     """
     Fan the morning research out to the dedicated operator channels (once per run,
-    not per cycle): research brief → #ft-research, regime headline → #ft-command-post,
+    not per cycle): research brief → #ft-research, regime headline → #ft-command-center,
     marketwide-discovery scan → #ft-signals.
     """
     if not dn:
@@ -3401,7 +3401,7 @@ if __name__ == "__main__":
                 )
             except Exception as e:
                 log.warning(f"Could not write routine heartbeat for '{routine}': {e}")
-        # Post the !status snapshot to #ft-command-post on EVERY trading routine — including
+        # Post the !status snapshot to #ft-command-center on EVERY trading routine — including
         # failures — so the channel is a live pulse (equity / day P&L / cash / positions)
         # even when a routine crashed. Best-effort; never masks the routine's exit code.
         if routine in _STATUS_ROUTINES:

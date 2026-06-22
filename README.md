@@ -12,7 +12,7 @@ dashboard, a Discord bot, and a desktop shell wrap it. **Paper only — not fina
 ```
 app.py            Desktop shell (pywebview): embeds the dashboard, "Discord/Alpaca" tab
 dashboard.py      Streamlit UI (localhost:8501): clock, tickers, charts, positions+strategy, AI chat
-bot.py            Discord bot — !commands, non-blocking; !heartbeat runs a full live cycle
+bot.py            FeintTrade Command Center bot — !commands, non-blocking; !heartbeat runs a full live cycle
 scripts/
   orchestrator.py research | trading | cycle | eod | afterhours | crypto | report
   common.py       symbol normalization (BTCUSD→BTC/USD), MDT/MST time, risk config, sessions

@@ -65,6 +65,22 @@ def router(monkeypatch, tmp_path):
 
 # ── Channel resolution + fallback ────────────────────────────────────────────────
 
+def test_command_center_name_and_env_alias(monkeypatch):
+    monkeypatch.setenv("DISCORD_CH_COMMAND_POST", "legacy-id")
+    monkeypatch.setenv("DISCORD_CH_COMMAND_CENTER", "center-id")
+
+    assert dch.channel_id("command_post") == "center-id"
+    assert dch.display_channel_name("command_post") == "command-center"
+    assert dch.display_channel_name("trade_log") == "trade-log"
+
+
+def test_command_center_falls_back_to_legacy_env(monkeypatch):
+    monkeypatch.delenv("DISCORD_CH_COMMAND_CENTER", raising=False)
+    monkeypatch.setenv("DISCORD_CH_COMMAND_POST", "legacy-id")
+
+    assert dch.channel_id("command_post") == "legacy-id"
+
+
 def test_routes_to_mapped_channel(router):
     _cfg, ids, posts = router
     dch.post("stop_loss", embed={"title": "x"})

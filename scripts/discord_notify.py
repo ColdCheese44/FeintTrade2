@@ -536,7 +536,7 @@ def _status_updates_enabled() -> bool:
 def status_update(routine, account=None, positions=None, note=""):
     """
     Post the `!status` snapshot — portfolio equity, day P&L, cash, open positions, and
-    market/kill state — to #ft-command-post after a routine/cycle/trade so the channel is a
+    market/kill state — to #ft-command-center after a routine/cycle/trade so the channel is a
     live pulse of the book. Pass account/positions if the caller already has them to skip an
     Alpaca round-trip; otherwise they're fetched (cached ~20s). Gated by
     discord.command_post_status_updates.
@@ -640,7 +640,7 @@ def research_brief(title, body):
 
 
 def market_summary(regime_label, summary, fields=None):
-    """Concise market/regime summary → #ft-command-post (scannable in 5 seconds)."""
+    """Concise market/regime summary → #ft-command-center (scannable in 5 seconds)."""
     send(
         title=f"🧭 Market Summary — {regime_label}"[:240],
         description=(summary or "")[:2000],

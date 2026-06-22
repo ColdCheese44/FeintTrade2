@@ -133,7 +133,7 @@
   },
 
   "discord": {
-    "note": "10-channel operator routing ported from FeintTrade. Channel IDs live in .env (DISCORD_CH_*); posting uses DISCORD_BOT_TOKEN via the bot API and falls back to command_post then the DISCORD_WEBHOOK_URL. Severity cooldowns + dedup prevent alert spam; trades/proposals are INFO (cooldown 0) so they always post. Set multichannel_enabled=false to revert to single-webhook behavior.",
+    "note": "FeintTrade Command Center routing. The public primary channel is #ft-command-center; command_post remains the internal compatibility key. Its ID may use DISCORD_CH_COMMAND_CENTER (preferred) or DISCORD_CH_COMMAND_POST (legacy). Posting uses DISCORD_BOT_TOKEN and falls back to the command center, then DISCORD_WEBHOOK_URL. Severity cooldowns + dedup prevent alert spam; trades/proposals are INFO (cooldown 0) so they always post. Set multichannel_enabled=false to revert to single-webhook behavior.",
     "multichannel_enabled": true,
     "command_post_status_updates": true,
     "routing": {

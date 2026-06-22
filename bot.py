@@ -1,6 +1,7 @@
 """
 FeintTrade — Discord Bot
-Listens in DISCORD_MINDHUB_CHANNEL_ID for !commands and shells out to discord_commands.py.
+Listens in the FeintTrade Command Center for !commands and shells out to
+discord_commands.py.
 Run: python bot.py
 """
 
@@ -17,9 +18,12 @@ ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env", override=True)
 
 TOKEN      = os.getenv("DISCORD_BOT_TOKEN")
-# Bot listens in the primary command-post channel (ft-command-post); falls back to
-# the legacy channel id if command_post isn't configured.
-CHANNEL_ID = int(os.getenv("DISCORD_CH_COMMAND_POST") or os.getenv("DISCORD_MINDHUB_CHANNEL_ID", "0"))
+# Prefer the renamed #ft-command-center variable while retaining both legacy aliases.
+CHANNEL_ID = int(
+    os.getenv("DISCORD_CH_COMMAND_CENTER")
+    or os.getenv("DISCORD_CH_COMMAND_POST")
+    or os.getenv("DISCORD_MINDHUB_CHANNEL_ID", "0")
+)
 
 COMMANDS = {"!status", "!positions", "!strategies", "!orders", "!price", "!buy", "!sell",
             "!report", "!kill", "!resume", "!cancel", "!journal", "!heartbeat", "!help",
@@ -97,11 +101,11 @@ async def _run_cycle_async(channel: discord.TextChannel):
 
 @client.event
 async def on_ready():
-    print(f"FeintTrade Bot online as {client.user} — command channel {CHANNEL_ID}")
+    print(f"FeintTrade Command Center online as {client.user} — command channel {CHANNEL_ID}")
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         # The channel cache can be empty on the very first connect; fetch via REST so
-        # the online banner reliably lands in ft-command-post (not silently skipped).
+        # the online banner reliably lands in ft-command-center (not silently skipped).
         try:
             channel = await client.fetch_channel(CHANNEL_ID)
         except Exception as e:
@@ -109,7 +113,7 @@ async def on_ready():
     if channel:
         await channel.send(
             embed=discord.Embed(
-                title="🤖 FeintTrade Bot Online",
+                title="🤖 FeintTrade Command Center Online",
                 description="Ready to receive commands.\n\n"
                             "`!status` `!positions` `!strategies` `!price` `!orders` `!buy` `!sell` "
                             "`!report` `!kill` `!resume` `!cancel` `!journal` `!heartbeat`\n"
