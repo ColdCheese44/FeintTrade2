@@ -4,16 +4,17 @@ Run: python -m pytest tests/test_entry_tracking.py -v
 
 Guards the learning log against recording a position that never actually filled.
 
-Background: log_entry() runs on broker ACCEPTANCE, not FILL (orchestrator buy path).
-A non-marketable limit buy that is accepted but never fills writes an orphan entry into
-open_trades.json. detect_and_log_exits() then sees the symbol isn't in live positions
-and — once the orphan ages past the 5-min recency guard — fabricates a phantom
-round-trip exit at the live mark (the fake "$61k BTC buy" +9–10% wins).
+Background: entry learning must run on broker FILL, not ACCEPTANCE. A non-marketable
+limit buy that is accepted but never fills must not write an orphan entry into
+open_trades.json, where it could later become a phantom round-trip exit.
 
 Fix 1 (covered here): when cancel_stale_orders() cancels an unfilled BUY, the
 orchestrator calls learning.forget_unfilled_entry() to drop the orphan before it can
 become a phantom. trade.py stays free of any learning import; the orchestrator owns the
 reconciliation.
+
+The generic executor also records only Alpaca-confirmed filled quantities. Unfilled
+accepted buys remain solely in the execution ledger until reconciliation.
 """
 
 import json
@@ -353,6 +354,40 @@ def test_execute_sell_unfilled_does_not_log_exit(L, monkeypatch):
     assert events[-1]["status"] == "placed_unfilled"
     assert L._load_trade_log() == []
     assert "NVDA" in L._load_open_trades()
+
+
+def test_execute_buy_unfilled_does_not_create_open_trade(L, monkeypatch):
+    """Broker acceptance alone must never become a learned entry."""
+    import importlib
+    orch = importlib.import_module("scripts.orchestrator")
+
+    monkeypatch.setattr(orch, "_notify", lambda *a, **k: None)
+    monkeypatch.setattr(
+        orch.trade,
+        "place_order",
+        lambda *a, **k: {"id": "buy_unfilled", "status": "new"},
+    )
+    monkeypatch.setattr(orch.trade, "get_order_fill", lambda *a, **k: (0.0, None, "new"))
+    monkeypatch.setattr(orch.trade, "validate_order", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(orch.trade, "equities_open_now", lambda *a, **k: True)
+    monkeypatch.setattr(orch, "check_daily_stop", lambda *a, **k: {"soft_stop": False, "hard_stop": False})
+    monkeypatch.setattr(orch, "loss_streak_lockout_enforced", lambda: False)
+    monkeypatch.setattr(orch, "kill_active", lambda: False)
+
+    events = []
+    orch._execute_orders(
+        [{"symbol": "NVDA", "qty": 1, "side": "buy", "limit_price": 100,
+          "setup_type": "ema_vwap_cross", "score": 8, "reasoning": "test"}],
+        account={"equity": 100000, "cash": 100000, "last_equity": 100000},
+        positions=[],
+        symbol_limits={"NVDA": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"NVDA": "ema_vwap_cross"},
+        collect_events=events,
+    )
+
+    assert L._load_open_trades() == {}
+    assert events[-1]["status"] == "placed_unfilled"
 
 
 # ── 6. Partial-exit / late-fill reconciliation (the FAS 53-vs-11 bug) ──────────

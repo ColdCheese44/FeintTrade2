@@ -449,8 +449,9 @@ class TestLimitOnly:
         r = trade.place_order("NVDA", 10, "buy", 0)
         assert "error" in r and "market orders are not permitted" in r["error"].lower() or "Limit price" in r["error"]
 
-    def test_place_order_accepts_limit(self, monkeypatch):
+    def test_place_order_accepts_limit(self, monkeypatch, tmp_path):
         captured = {}
+        monkeypatch.setattr(trade.ledger, "DB_PATH", tmp_path / "execution.sqlite")
 
         class _R:
             status_code = 200
@@ -462,6 +463,7 @@ class TestLimitOnly:
         assert r.get("status") == "accepted"
         assert captured["json"]["type"] == "limit"            # never market
         assert captured["json"]["limit_price"] == "100.5"
+        assert captured["json"]["client_order_id"].startswith("ft-")
 
 
 if __name__ == "__main__":

@@ -85,7 +85,8 @@ def _wire_orchestrator(monkeypatch, tmp_path, placed):
 
     orch = importlib.import_module("scripts.orchestrator")
     monkeypatch.setattr(orch.trade, "place_order",
-                        lambda sym, qty, side, price: placed.append((sym, float(qty), side, price)) or {"id": "ok"})
+                        lambda sym, qty, side, price, **kwargs:
+                        placed.append((sym, float(qty), side, price)) or {"id": "ok"})
     monkeypatch.setattr(orch.trade, "get_order_fill", lambda *a, **k: (0.0, None, "new"))
     monkeypatch.setattr(orch.trade, "check_duplicate_entry", lambda *a, **k: (True, "ok"))
     monkeypatch.setattr(orch, "_notify", lambda *a, **k: None)

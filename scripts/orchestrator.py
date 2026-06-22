@@ -1419,9 +1419,26 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
             break
 
         log.info(f"Placing order: {side} {qty} {sym} @ {price} (mult={multiplier}, live_scale={live_scale})")
-        result = trade.place_order(sym, qty, side, price)
+        result = trade.place_order(
+            sym,
+            qty,
+            side,
+            price,
+            intent_key=f"{setup_type}|{order.get('score', order.get('conviction', ''))}",
+            intent_context={
+                "learning_managed": True,
+                "setup_type": setup_type or "unknown",
+                "conviction": order.get("conviction", order.get("score", 5)),
+                "signals": order.get("signals", {}),
+                "regime": regime.get("regime", "NEUTRAL"),
+                "vix": regime.get("vix"),
+                "notes": order.get("reasoning", ""),
+                "exit_reason": order.get("exit_reason") or order.get("setup_type", "sell"),
+            },
+        )
         if isinstance(result, dict) and result.get("error"):
             err = str(result["error"])
+            ambiguous = bool(result.get("ambiguous"))
             # Non-tradeable symbol (common with exotic discovery tickers) — skip
             # quietly instead of firing a scary "rejected" alert.
             not_tradeable = any(s in err.lower() for s in
@@ -1429,15 +1446,25 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                                  "not tradeable", "is not allowed", "asset not"))
             # Non-tradeable symbols are an expected discovery artifact, not an error —
             # log at WARNING so they don't inflate the diagnostic ERROR count.
-            (log.warning if not_tradeable else log.error)(f"Order failed: {err} — {order}")
-            print(f"  {'SKIP (not tradeable)' if not_tradeable else 'FAILED'}: {side.upper()} {sym} — {err}")
-            if not not_tradeable:
+            if ambiguous:
+                log.warning(f"Order outcome unresolved: {err} — {order}")
+                print(f"  UNRESOLVED: {side.upper()} {sym} — {err}")
+                _notify(
+                    "alert",
+                    f"Order outcome unresolved for {sym}; no retry will be submitted until reconciliation. {err}",
+                )
+            else:
+                (log.warning if not_tradeable else log.error)(f"Order failed: {err} — {order}")
+                print(f"  {'SKIP (not tradeable)' if not_tradeable else 'FAILED'}: {side.upper()} {sym} — {err}")
+            if not not_tradeable and not ambiguous:
                 _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, f"Broker error: {err}")
             if collect_events is not None:
                 collect_events.append({
                     "symbol": sym,
                     "side": side,
-                    "status": "not_tradeable" if not_tradeable else "broker_error",
+                    "status": "unresolved" if ambiguous else (
+                        "not_tradeable" if not_tradeable else "broker_error"
+                    ),
                     "message": err,
                 })
             continue
@@ -1450,32 +1477,44 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
         event_status = "placed"
         event_message = "order accepted"
         if side == "buy":
-            record_session_entry(sym, is_green=False)
             # Confirm the fill before tracking: poll the order briefly so the learning
             # log records the REAL filled qty/avg price, not the requested values
-            # (fixes partial-fill qty drift). A buy that hasn't filled within the poll
-            # window falls back to the requested qty/price so a later fill is still
-            # tracked; if it NEVER fills, cancel_stale_orders() + forget_unfilled_entry()
-            # sweep the orphan so it can't become a phantom round-trip exit.
-            fill_qty, fill_px = float(qty), float(price)
+            # (fixes partial-fill qty drift). Accepted-but-unfilled orders stay in the
+            # execution ledger and are reconciled on the next routine. Requested qty is
+            # never treated as a fill.
+            fill_qty, fill_px = 0.0, None
+            fill_status = str(result.get("status") or "unknown")
             order_id = result.get("id") if isinstance(result, dict) else None
             if order_id:
                 try:
-                    fq, fpx, _ = trade.get_order_fill(order_id)
-                    if fq > 0:
-                        fill_qty = fq
-                        fill_px = fpx or fill_px
+                    fill_qty, fill_px, fill_status = trade.get_order_fill(order_id)
                 except Exception:
                     pass
-            log_entry(
-                symbol=sym, side=side, qty=fill_qty, price=fill_px,
-                setup_type=setup_type or "unknown",
-                conviction=order.get("conviction", 5),
-                signals=order.get("signals", {}),
-                regime=regime.get("regime", "NEUTRAL"),
-                vix=regime.get("vix"),
-                notes=order.get("reasoning", ""),
-            )
+            if fill_qty > 0:
+                fill_px = fill_px or float(price)
+                record_session_entry(sym, is_green=False)
+                log_entry(
+                    symbol=sym, side=side, qty=fill_qty, price=fill_px,
+                    setup_type=setup_type or "unknown",
+                    conviction=order.get("conviction", 5),
+                    signals=order.get("signals", {}),
+                    regime=regime.get("regime", "NEUTRAL"),
+                    vix=regime.get("vix"),
+                    notes=order.get("reasoning", ""),
+                )
+                client_id = result.get("client_order_id")
+                if client_id:
+                    trade.ledger.mark_learning_applied(client_id, fill_qty, fill_px)
+                event_status = "filled" if fill_qty >= float(qty) - 1e-9 else "partially_filled"
+                event_message = f"filled {fill_qty:g} @ ${fill_px}"
+                placed["filled_qty"] = fill_qty
+                placed["filled_avg_price"] = fill_px
+                placed["fill_status"] = fill_status
+            else:
+                event_status = "placed_unfilled"
+                event_message = f"order accepted but not filled yet ({fill_status})"
+                placed["fill_status"] = fill_status
+                log.warning(f"Buy order accepted but unfilled: {sym} {qty} @ {price} ({fill_status})")
         else:
             filled_qty, fill_px, fill_status = _confirm_order_fill(result, qty, price)
             if filled_qty > 0:
@@ -1492,6 +1531,9 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                         notes=order.get("reasoning", ""),
                         qty=filled_qty,
                     )
+                    client_id = result.get("client_order_id") if isinstance(result, dict) else None
+                    if client_id:
+                        trade.ledger.mark_learning_applied(client_id, filled_qty, fill_px)
                 except Exception:
                     pass
             else:
@@ -1508,6 +1550,58 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
             })
 
     return orders_placed
+
+
+def _apply_reconciled_fills() -> list:
+    """Apply delayed or incremental broker fills to learning exactly once."""
+    if not LEARNING_ENABLED:
+        return []
+    applied = []
+    for fill in trade.ledger.get_unapplied_fills():
+        context = fill.get("context") or {}
+        if not context.get("learning_managed"):
+            continue
+        qty = float(fill.get("delta_qty") or 0)
+        price = float(fill.get("delta_price") or fill.get("filled_avg_price") or 0)
+        if qty <= 0 or price <= 0:
+            continue
+        symbol = normalize_symbol(fill.get("symbol", ""))
+        side = str(fill.get("side") or "").lower()
+        try:
+            if side == "buy":
+                log_entry(
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    price=price,
+                    setup_type=context.get("setup_type") or "reconciled_entry",
+                    conviction=context.get("conviction", 5),
+                    signals=context.get("signals") or {},
+                    regime=context.get("regime") or "NEUTRAL",
+                    vix=context.get("vix"),
+                    notes=context.get("notes") or "Delayed fill applied during reconciliation",
+                )
+                record_session_entry(symbol, is_green=False)
+            elif side == "sell":
+                log_exit(
+                    symbol,
+                    price,
+                    exit_reason=context.get("exit_reason") or "reconciled_exit",
+                    notes=context.get("notes") or "Delayed fill applied during reconciliation",
+                    qty=qty,
+                )
+            else:
+                continue
+            trade.ledger.mark_learning_applied(
+                fill["client_order_id"],
+                float(fill.get("filled_qty") or qty),
+                float(fill.get("filled_avg_price") or price),
+            )
+            applied.append({"symbol": symbol, "side": side, "qty": qty, "price": price})
+            log.info(f"Applied reconciled fill to learning: {side} {qty:g} {symbol} @ {price:g}")
+        except Exception as exc:
+            log.exception(f"Could not apply reconciled fill {fill.get('client_order_id')}: {exc}")
+    return applied
 
 
 def _cancel_stale_orders(positions=None) -> list:
@@ -1529,7 +1623,9 @@ def _cancel_stale_orders(positions=None) -> list:
     held = {normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
             for p in (positions or [])}
     for c in cancelled:
-        if isinstance(c, dict) and c.get("side") == "buy":
+        if (isinstance(c, dict) and c.get("side") == "buy"
+                and float(c.get("filled_qty") or 0) <= 0
+                and str(c.get("status") or "canceled").lower() in ("canceled", "cancelled")):
             try:
                 forget_unfilled_entry(c.get("symbol"), held)
             except Exception:
@@ -3224,6 +3320,25 @@ if __name__ == "__main__":
                   f"{', '.join(_res['unpriced'])}")
         sys.exit(0 if _res["ok"] else 1)
 
+    if routine in _STATUS_ROUTINES:
+        try:
+            trade.ledger.append_event("routine.started", payload={"routine": routine})
+            reconciliation = trade.reconcile_orders(include_broker_orders=True)
+            applied_fills = _apply_reconciled_fills()
+            if applied_fills:
+                log.info(f"Applied {len(applied_fills)} delayed fill(s) during reconciliation")
+            if reconciliation.get("unresolved"):
+                message = (
+                    f"Execution reconciliation found {reconciliation['unresolved']} unresolved "
+                    f"order(s); conflicting submissions remain blocked."
+                )
+                log.warning(message)
+                _notify("alert", message)
+            if reconciliation.get("errors"):
+                log.warning(f"Execution reconciliation warnings: {reconciliation['errors']}")
+        except Exception as e:
+            log.warning(f"Execution reconciliation unavailable: {e}")
+
     try:
         import activity as _activity
     except Exception:
@@ -3266,6 +3381,26 @@ if __name__ == "__main__":
             _activity.log("routine_error", f"{routine}: {e}", error=str(e)[:200])
         print(f"FATAL ERROR in '{routine}': {e}")
     finally:
+        if routine in _STATUS_ROUTINES:
+            try:
+                trade.ledger.append_event(
+                    "routine.completed" if _routine_ok else "routine.failed",
+                    payload={"routine": routine},
+                )
+            except Exception as e:
+                log.warning(f"Could not record routine execution event: {e}")
+        # Keep the local liveness signal current for every autonomous trading routine.
+        # The status card below is already the Discord pulse, so this write is local-only.
+        if routine in _STATUS_ROUTINES:
+            try:
+                from heartbeat import write_heartbeat
+                write_heartbeat(
+                    "ok" if _routine_ok else "error",
+                    f"{routine}-{'complete' if _routine_ok else 'failed'}",
+                    notify=False,
+                )
+            except Exception as e:
+                log.warning(f"Could not write routine heartbeat for '{routine}': {e}")
         # Post the !status snapshot to #ft-command-post on EVERY trading routine — including
         # failures — so the channel is a live pulse (equity / day P&L / cash / positions)
         # even when a routine crashed. Best-effort; never masks the routine's exit code.

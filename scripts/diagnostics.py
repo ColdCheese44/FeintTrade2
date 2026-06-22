@@ -55,6 +55,10 @@ try:
 except Exception:
     dn = None
 try:
+    import discord_channels as dch
+except Exception:
+    dch = None
+try:
     import learning
 except Exception:
     learning = None
@@ -302,6 +306,47 @@ def _check_discord_bot_process(r):
         r.warning(f"Discord bot process check failed: {e}")
 
 
+def _check_discord_delivery(r):
+    """Verify the bot can read every configured channel without posting a test message.
+
+    A running gateway process is not sufficient: when the bot loses channel permissions,
+    outbound notifications can silently collapse onto the single webhook while commands
+    and dedicated-channel routing stop working.
+    """
+    if not os.getenv("DISCORD_BOT_TOKEN"):
+        if os.getenv("DISCORD_WEBHOOK_URL"):
+            r.warning("Discord bot token missing; webhook-only posting is available but commands are offline")
+        return
+    if dch is None:
+        r.error("Discord channel router unavailable")
+        return
+    try:
+        health = dch.health_check()
+    except Exception as e:
+        r.error(f"Discord channel health check failed: {e}")
+        return
+
+    configured = health.get("channels", {}) or {}
+    reach = health.get("reachability", {}) or {}
+    failed = [name for name, present in configured.items()
+              if present and reach.get(name) != "ok"]
+    if not failed:
+        r.good(f"Discord bot can access all {sum(bool(v) for v in configured.values())} configured channels")
+        return
+
+    command_state = reach.get("command_post", "unconfigured")
+    details = ", ".join(
+        f"#{name.replace('_', '-')} ({reach.get(name, 'unknown')})" for name in failed
+    )
+    if command_state != "ok":
+        r.error("Discord command channel is inaccessible to the bot "
+                f"({command_state}); commands cannot be received")
+    r.error(f"Discord multichannel routing is degraded: {details}")
+    if health.get("webhook_present"):
+        r.warning("Discord webhook fallback is present, so posts may still appear in one channel; "
+                  "that does not restore bot commands or dedicated-channel routing")
+
+
 def _check_egress_ip(r):
     """Report the public egress IP so you can see — especially on HEADLESS runs — whether
     traffic is leaving via the VPN or the bare ISP connection. Informational only."""
@@ -324,6 +369,7 @@ def run(fix=True, post=True):
     _check_logs(r)
     _check_bot_pid(r, fix)
     _check_discord_bot_process(r)
+    _check_discord_delivery(r)
 
     lines = [f"# FeintTrade Diagnostics — {now_mt_str()}",
              f"Status: {'✅ HEALTHY' if r.healthy() else '❌ ISSUES FOUND'}", ""]

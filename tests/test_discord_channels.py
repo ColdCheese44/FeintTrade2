@@ -116,6 +116,41 @@ def test_multichannel_disabled_uses_webhook(router):
     assert posts[-1][0] == "webhook"
 
 
+def test_webhook_fallback_is_logged_as_actual_transport(router, monkeypatch):
+    _cfg, _ids, posts = router
+    events = []
+
+    class CaptureActivity:
+        @staticmethod
+        def log(event, summary, **details):
+            events.append((event, summary, details))
+
+    monkeypatch.setattr(dch, "activity", CaptureActivity())
+    monkeypatch.setattr(dch, "_post_bot_json", lambda cid, payload: False)
+    dch.post("research", embed={"title": "x"})
+
+    assert posts[-1][0] == "webhook"
+    event, summary, details = events[-1]
+    assert event == "discord_post"
+    assert "#webhook" in summary
+    assert details["transport"] == "webhook_fallback"
+    assert details["requested_channel"] == "research"
+
+
+def test_image_falls_back_to_webhook(router, monkeypatch):
+    _cfg, _ids, posts = router
+    monkeypatch.setattr(dch, "_post_bot_image", lambda *a, **k: False)
+    monkeypatch.setattr(
+        dch,
+        "_post_webhook_image",
+        lambda filename, image_bytes, payload: posts.append(
+            ("webhook_image", filename, image_bytes, payload)
+        ) or True,
+    )
+    assert dch.post_image("training", "lesson.png", b"png", embed={"title": "x"})
+    assert posts[-1][:3] == ("webhook_image", "lesson.png", b"png")
+
+
 # ── Alert policy: severity, cooldown, dedup, quiet hours ─────────────────────────
 
 def test_severity_for_type(router):

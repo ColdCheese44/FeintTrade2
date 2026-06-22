@@ -67,9 +67,27 @@ def test_status_update_up_day_is_green(monkeypatch, tmp_path):
     dn.status_update("crypto")
     _, embed = cap[0]
     assert embed["color"] == dn.GREEN
+    assert "Portfolio Status" in embed["title"] and "after crypto" in embed["title"]
+    assert "Crypto holdings: 0" in embed["description"]
+    assert "full account snapshot" in embed["description"]
     # no positions -> Holdings (0) with the cash message
     held = next(f for f in embed["fields"] if "Holdings" in f["name"])
     assert "(0)" in held["name"] and "cash" in held["value"].lower()
+
+
+def test_crypto_status_counts_only_crypto_holdings(monkeypatch, tmp_path):
+    cap = _wire(
+        monkeypatch,
+        tmp_path,
+        {"equity": "100000", "cash": "50000", "last_equity": "100000"},
+        [
+            {"symbol": "AMD", "asset_class": "us_equity"},
+            {"symbol": "BTCUSD", "asset_class": "crypto"},
+        ],
+    )
+    dn.status_update("crypto")
+    _, embed = cap[0]
+    assert "Crypto holdings: 1" in embed["description"]
 
 
 def test_status_card_shows_holiday_when_clock_closed(monkeypatch, tmp_path):

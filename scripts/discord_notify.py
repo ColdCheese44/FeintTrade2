@@ -555,11 +555,12 @@ def status_update(routine, account=None, positions=None, note=""):
 
     killed = (_ROOT / "kill.flag").exists()
     try:
-        from common import market_phase, normalize_symbol as _norm
+        from common import is_crypto as _is_crypto, market_phase, normalize_symbol as _norm
         phase = market_phase()
     except Exception:
         phase = ""
         _norm = None
+        _is_crypto = lambda symbol, asset_class=None: "/" in str(symbol)
     # market_phase() is time-based and HOLIDAY-BLIND (it called Juneteenth "REGULAR"). Use
     # the broker clock to correct the label during would-be regular hours. eq_open is None
     # when the clock can't be reached (fail-open to the time-based label).
@@ -577,6 +578,14 @@ def status_update(routine, account=None, positions=None, note=""):
         state = f"🟡 {phase.replace('_', ' ').title()} · crypto 24/7"
     else:
         state = "🔴 Market Closed · crypto 24/7"
+
+    scope_note = ""
+    if routine == "crypto":
+        crypto_count = sum(
+            1 for p in positions
+            if _is_crypto(p.get("symbol", ""), p.get("asset_class"))
+        )
+        scope_note = f"Crypto holdings: {crypto_count} · full account snapshot shown"
 
     invested = equity - cash
     cash_pct = (cash / equity * 100) if equity else 0.0
@@ -608,8 +617,9 @@ def status_update(routine, account=None, positions=None, note=""):
 
     send(
         msg_type="status_update",
-        title=f"📟 Status · {routine}",
-        description=(state + (f"\n{note}" if note else "")),
+        title=f"📟 Portfolio Status · after {routine}",
+        description=(state + (f"\n{scope_note}" if scope_note else "")
+                     + (f"\n{note}" if note else "")),
         color=color,
         fields=fields,
     )
