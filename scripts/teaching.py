@@ -33,6 +33,17 @@ ACTION_TITLE = {
 # (gap/scored/inverse/short/panic) are listed BEFORE the generic momentum/breakout, or a
 # name like "short_momentum" would match "momentum" and lose its inverse-ETF lesson.
 SETUP_EXPLAIN = {
+    "pump": "Pump-and-dump risk: this is NOT a trade setup. We skip or quarantine parabolic, low-quality hype moves instead of trying to outsmart manipulation.",
+    "long_hold": "Long-hold trend: a position trade where the thesis and major trend stay intact. We trail winners instead of selling just because the clock changed.",
+    "day_trade": "Day-trade momentum: same-session only, high liquidity, high score, and a clear catalyst. If it is not obvious, it is not a day trade.",
+    "scalp": "Scalp liquidity: tiny target, tight spread, strict stop. This is high-churn and only allowed at very high conviction.",
+    "overnight": "Overnight momentum: carrying gap risk only when the close is strong and the catalyst/trend justify it.",
+    "volatility": "Volatility breakout: the trade is the expansion after a coil or ATR shift. We do not chase thin parabolic names.",
+    "price_action": "Price action reversal: a candle reversal at support/resistance with volume confirmation. Pattern plus location, not pattern alone.",
+    "sector_rotation": "Sector rotation: move capital toward relative strength and away from laggards, using liquid ETFs/leaders to avoid whipsaw.",
+    "sentiment": "Sentiment contrarian: fear/greed can help, but only after price stabilizes. Sentiment alone is not a buy signal.",
+    "macro": "Macro setup: rates, USD, volatility, and liquidity shape risk-on/risk-off posture; execute only through supported liquid symbols.",
+    "gold": "Gold macro proxy: defensive allocation through a liquid ETF when trend and rates/USD context agree. Small and incubated.",
     "gap": "Gap-and-go: the stock opened well above yesterday's close on a fresh catalyst and kept running. We buy strength that HOLDS the gap — a gap that fills back in is a trap.",
     "scored": "Crypto scored system: we tally ~14 trend/momentum/sentiment signals and only buy at ≥5/10. A quant-style checklist removes emotion and 'this feels like a bottom' guessing.",
     "inverse": "Inverse ETF: it RISES when the market falls. We buy it only on its OWN confirmed uptrend in a non-bull tape — never to 'catch' a one-day dip while the broader trend is still up (that quietly bled the book).",

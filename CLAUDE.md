@@ -138,6 +138,13 @@ NVDA (30%), AMD (25%), TSLA (25%), MSTR (20%), COIN (20%), PLTR (20%)
 
 Rules: Gap-and-go and breakout plays. News catalyst required for >20% allocation. Earnings within 3 days = reduce size by 75% or skip.
 
+### Broad / Macro ETF Proxies
+SPY (15%), QQQ (18%), IWM (12%), GLD (10%), TLT (10%)
+
+Rules: Use these for broad-market, Nasdaq, Russell 2000, sector/asset rotation, gold,
+fixed-income, macro risk-on/risk-off, sentiment, overnight, and long-hold trend strategies.
+They are lower-beta tools than 3x ETFs; still require score, R:R, regime fit, and limit orders.
+
 ### Crypto (24/7, Scored System)
 BTC/USD (35%), ETH/USD (25%), SOL/USD (20%), DOGE/USD (15%), AVAX/USD (15%), LINK/USD (15%), XRP/USD (15%)
 
@@ -425,6 +432,38 @@ Target: SQQQ equivalent of 8-15% move
 Stop: -3% from entry in BEAR regime
 Exit: Target, regime shifts back to NEUTRAL, or thesis break (SWING — no forced 1:45 PM flatten; UVXY never overnight)
 Critical: UVXY is intraday only — never hold overnight. It decays rapidly.
+
+---
+
+## EXPANDED STRATEGY PLAYBOOK (Robust-Trader families mapped to FeintTrade)
+
+The agent should understand the full strategy vocabulary: swing, volatility, S&P 500,
+overnight, day trading, mean reversion, Nasdaq, fixed income, candlesticks, treasuries,
+technical indicators, Russell 2000, seasonality, sector rotation, momentum, trend following,
+Connors/RSI2, trend reversal, sentiment, moving averages, macro, bear market,
+market-neutral, breakout, volatility indicators, oscillators, price action, mixed indicators,
+gold, and forex. But it may only place orders through supported Alpaca symbols and setup types.
+
+Executable FeintTrade setup labels:
+- `long_hold_trend`: position-style trend hold; score >= 7, trail winners, no clock-based exits.
+- `swing_momentum`: core multi-day momentum setup; score >= 6, R:R >= 2:1.
+- `day_trade_momentum`: same-session momentum; score >= 8, high liquidity, explicit catalyst.
+- `scalp_liquidity`: minutes-long scalp; score >= 8, tight spread, strict stop, no lingering.
+- `overnight_momentum`: strong-close/catalyst carry; score >= 7 and gap risk must be paid.
+- `volatility_breakout`: ATR/volatility expansion after a coil; score >= 7.
+- `price_action_reversal`: candle reversal at a meaningful level with volume; score >= 7.
+- `sector_rotation`: rotate toward relative strength using liquid ETFs/leaders.
+- `sentiment_contrarian`: fear/greed only after price stabilizes; sentiment alone is never enough.
+- `macro_risk_on` / `macro_risk_off`: use SPY/QQQ/IWM/TLT/GLD/inverse ETFs as liquid proxies.
+- `gold_macro_proxy`: GLD-style defensive/macro setup; small, incubated, trend-confirmed.
+
+Advisory-only until execution support exists:
+- `market_neutral_pair` (needs paired/hedged order primitive)
+- `forex_macro_proxy` (spot FX unsupported)
+
+Forbidden as an entry:
+- `pump_and_dump`, `pump_dump`, or any pump-and-dump wording. Treat suspected pumps as
+  manipulation/liquidity risk: skip, quarantine, or use `pump_and_dump_avoidance` as a blocker.
 
 ---
 

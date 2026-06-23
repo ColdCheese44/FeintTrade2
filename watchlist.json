@@ -1,5 +1,5 @@
 {
-  "strategy": "aggressive_daytrading_multi_asset",
+  "strategy": "aggressive_multi_strategy_swing",
   "cash_reserve_pct": 5,
   "max_daily_drawdown_pct": 6,
   "max_open_positions": 8,
@@ -72,6 +72,39 @@
     "trail_arm_pct": 5.0,
     "trail_giveback_pct": 4.0,
     "require_momentum_confirmation": true,
+    "expanded_strategy_note": "Expanded Robust-Trader-inspired playbook is injected by scripts/strategy_playbook.py. Most strategies are vocabulary and context; buys still require setup_type, score, R:R, regime fit, liquidity, and all risk caps. Pump-and-dump is avoidance/quarantine only.",
+    "approved_setups": [
+      "long_hold_trend",
+      "swing_momentum",
+      "day_trade_momentum",
+      "scalp_liquidity",
+      "overnight_momentum",
+      "volatility_breakout",
+      "bb_squeeze_breakout",
+      "ema_vwap_cross",
+      "gap_and_go",
+      "vwap_bounce",
+      "mean_reversion",
+      "fibonacci_level",
+      "obv_divergence",
+      "price_action_reversal",
+      "sector_rotation",
+      "sentiment_contrarian",
+      "macro_risk_on",
+      "macro_risk_off",
+      "gold_macro_proxy",
+      "crypto_scored",
+      "short_momentum",
+      "inverse_etf_momentum",
+      "panic_hedge"
+    ],
+    "restricted_setups": {
+      "pump_and_dump_avoidance": "skip/quarantine only; never an entry",
+      "market_neutral_pair": "advisory until paired execution exists",
+      "forex_macro_proxy": "advisory; Alpaca spot FX unsupported",
+      "day_trade_momentum": "requires explicit score >= 8",
+      "scalp_liquidity": "requires explicit score >= 8"
+    },
     "setup_size_multiplier": {
       "note": "Data-driven risk scaling per setup (code-enforced in _execute_orders, buys only). Setups not listed default to 1.0. NOTE: momentum_breakout is now fully blocked via disabled_setups (below), so its multiplier is moot until re-enabled.",
       "momentum_breakout": 0.5
@@ -258,6 +291,46 @@
       "max_allocation_pct": 20,
       "regimes": ["BULL", "NEUTRAL"],
       "strategies": ["momentum_breakout", "ema_vwap_cross", "bb_squeeze_breakout"]
+    },
+    {
+      "symbol": "SPY",
+      "type": "broad_market_etf",
+      "description": "S&P 500 ETF - broad-market trend, overnight, sentiment, and macro risk-on proxy",
+      "max_allocation_pct": 15,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["long_hold_trend", "swing_momentum", "sector_rotation", "macro_risk_on", "sentiment_contrarian", "overnight_momentum"]
+    },
+    {
+      "symbol": "QQQ",
+      "type": "broad_market_etf",
+      "description": "Nasdaq-100 ETF - liquid growth/tech trend and momentum proxy",
+      "max_allocation_pct": 18,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["long_hold_trend", "swing_momentum", "sector_rotation", "volatility_breakout", "ema_vwap_cross"]
+    },
+    {
+      "symbol": "IWM",
+      "type": "broad_market_etf",
+      "description": "Russell 2000 ETF - small-cap rotation and divergence watch",
+      "max_allocation_pct": 12,
+      "regimes": ["BULL", "NEUTRAL"],
+      "strategies": ["sector_rotation", "swing_momentum", "mean_reversion", "price_action_reversal"]
+    },
+    {
+      "symbol": "GLD",
+      "type": "commodity_etf",
+      "description": "Gold ETF - defensive/macro proxy; incubate small and require trend plus rates/USD confirmation",
+      "max_allocation_pct": 10,
+      "regimes": ["BULL", "NEUTRAL", "BEAR"],
+      "strategies": ["gold_macro_proxy", "macro_risk_off", "sector_rotation", "long_hold_trend"]
+    },
+    {
+      "symbol": "TLT",
+      "type": "fixed_income_etf",
+      "description": "20+ Year Treasury ETF - fixed-income/rates proxy for risk-off and falling-yield regimes",
+      "max_allocation_pct": 10,
+      "regimes": ["NEUTRAL", "BEAR"],
+      "strategies": ["macro_risk_off", "sentiment_contrarian", "long_hold_trend"]
     },
     {
       "symbol": "SOXS",

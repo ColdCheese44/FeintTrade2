@@ -189,6 +189,54 @@ def test_disabled_setup_buy_is_hard_blocked(monkeypatch, tmp_path):
     assert placed and placed[0][0] == "FAS"
 
 
+def test_pump_and_dump_setup_is_hard_blocked(monkeypatch, tmp_path):
+    """Pump-and-dump wording is manipulation risk, never an executable entry setup."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
+    events = []
+    orch._execute_orders(
+        [{"symbol": "NVDA", "qty": 10, "side": "buy", "limit_price": 100.0,
+          "setup_type": "pump_and_dump", "score": 10, "conviction": 10}],
+        account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
+        positions=[], symbol_limits={"NVDA": 30},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"NVDA": "pump_and_dump"}, collect_events=events,
+    )
+
+    assert not placed
+    assert any("pump-and-dump" in e["message"] for e in events)
+
+
+def test_scalp_setup_requires_score_8(monkeypatch, tmp_path):
+    """Scalping/day-trading labels are allowed only as high-conviction setups."""
+    placed = []
+    orch = _wire_orchestrator(monkeypatch, tmp_path, placed)
+    events = []
+    orch._execute_orders(
+        [{"symbol": "SPY", "qty": 10, "side": "buy", "limit_price": 500.0,
+          "setup_type": "scalp_liquidity", "score": 7, "conviction": 7}],
+        account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
+        positions=[], symbol_limits={"SPY": 15},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"SPY": "scalp_liquidity"}, collect_events=events,
+    )
+
+    assert not placed
+    assert any("score >= 8" in e["message"] for e in events)
+
+    events.clear()
+    orch._execute_orders(
+        [{"symbol": "SPY", "qty": 10, "side": "buy", "limit_price": 500.0,
+          "setup_type": "scalp_liquidity", "score": 8, "conviction": 8}],
+        account={"equity": 100_000, "cash": 100_000, "last_equity": 100_000},
+        positions=[], symbol_limits={"SPY": 15},
+        regime={"regime": "BULL", "multiplier": 1.0},
+        setup_types={"SPY": "scalp_liquidity"}, collect_events=events,
+    )
+
+    assert placed and placed[-1][0] == "SPY"
+
+
 def test_real_config_disables_momentum_breakout(monkeypatch, tmp_path):
     """The shipped watchlist.json must keep momentum_breakout disabled (it was the
     entire realized drawdown). Guards against an accidental re-enable in config."""

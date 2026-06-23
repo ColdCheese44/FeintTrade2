@@ -500,6 +500,9 @@ SECTOR_MAP = {
     "MSTR": "crypto_equity", "COIN": "crypto_equity",
     # Single-name leveraged sector ETFs (own buckets).
     "LABU": "biotech", "FAS": "financials",
+    # Broad-market and macro proxies added for expanded strategy coverage.
+    "SPY": "broad_market", "QQQ": "tech", "IWM": "small_cap",
+    "GLD": "precious_metals", "TLT": "fixed_income",
 }
 
 

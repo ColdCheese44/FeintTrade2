@@ -135,6 +135,13 @@ except Exception as e:
     log.warning(f"Report module unavailable: {e}")
     session_report = None
 
+try:
+    from strategy_playbook import strategy_prompt_brief, validate_setup_for_entry
+except Exception as e:
+    log.warning(f"Strategy playbook unavailable: {e}")
+    def strategy_prompt_brief(): return ""
+    def validate_setup_for_entry(*a, **k): return (True, "ok")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1036,6 +1043,9 @@ def _load_context() -> dict:
                 "leave dry powder for better setups later), respect the crypto-exposure cap, only order "
                 "Alpaca-tradeable symbols."
             )
+            expanded = strategy_prompt_brief()
+            if expanded:
+                ctx["strategy_brief"] += "\n\n" + expanded
             ctx["performance_brief"] = (ctx.get("performance_brief") or "") + "\n\n" + ctx["strategy_brief"]
             # Replace the (now mostly empty) defensive recs with the strategy stance.
             ctx["recommendations"] = (
@@ -1235,6 +1245,19 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
         # — it called Juneteenth "open"). A non-crypto BUY when equities are closed can't
         # fill; it just rests until the next cycle cancels it as stale, churning API + order
         # spam. Skip it here so EVERY routine is protected. Crypto trades 24/7 — never gated.
+        if side == "buy":
+            setup_ok, setup_msg = validate_setup_for_entry(setup_type, score=_sv)
+            if not setup_ok:
+                msg = f"BUY BLOCKED - {sym} setup '{setup_type}' rejected: {setup_msg}"
+                log.warning(msg)
+                print(f"  REJECTED (strategy-playbook): {sym} - {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                    })
+                continue
+
         if side == "buy" and not _is_crypto(sym) and not trade.equities_open_now():
             msg = (f"BUY SKIPPED — {sym}: equity/options market is closed "
                    f"(broker clock; holiday/weekend/after-hours). Order would not fill.")

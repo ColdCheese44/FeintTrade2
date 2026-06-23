@@ -70,6 +70,9 @@ or set `FEINT_BROWSER_MODE` when you need `maximized`, `normal`, or explicit `ki
 - **Regime multiplier applied once**, in `trade`/orchestrator; prompts size at full allocation.
 - **Idempotent execution:** every order has a deterministic client ID; ambiguous submissions
   remain blocked until broker reconciliation, and requested quantity is never treated as a fill.
+- **Expanded strategy playbook:** swing/position, day-trade momentum, scalping, overnight,
+  volatility, rotation, macro, sentiment, gold/fixed-income proxies, and price-action labels
+  are mapped in `scripts/strategy_playbook.py`; pump-and-dump is treated only as skip/quarantine risk.
 - **"No trade" is a success.** Over-trading is the small-account killer.
 - **$100 → $1,000 live rehearsal:** `live_account` config can scale paper sizing to the real
   small account; prompts always factor the small-capital reality.

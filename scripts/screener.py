@@ -2,7 +2,7 @@
 Marketwide discovery scanner — FeintTrade.
 
 Surfaces trending, liquid, TRADABLE symbols beyond the static watchlist so the
-agent can hunt the whole market, not just 19 names. Sources:
+agent can hunt the whole market, not just the static watchlist. Sources:
   • Alpaca most-active stocks         (/v1beta1/screener/stocks/most-actives)
   • Alpaca top movers (gainers/losers) (/v1beta1/screener/stocks/movers)
   • CoinGecko trending coins           (mapped to Alpaca crypto pairs)

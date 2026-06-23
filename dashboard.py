@@ -763,6 +763,19 @@ def render_sector_heatmap(sectors: dict):
 
 # Plain-English, slightly cheeky one-liners so hovering a position teaches the setup.
 STRATEGY_BLURBS = {
+    "long_hold_trend": "Position trend hold. Thesis intact, major trend up, trail the winner.",
+    "swing_momentum": "Core swing setup: trend, VWAP, volume, and R:R line up.",
+    "day_trade_momentum": "Same-session momentum. High liquidity and high score required.",
+    "scalp_liquidity": "Fast liquidity scalp. Tiny target, tight invalidation, no lingering.",
+    "overnight_momentum": "Strong close/catalyst carry. Gap risk must pay for itself.",
+    "volatility_breakout": "Volatility expansion after a coil or ATR shift. No thin parabolic chase.",
+    "price_action_reversal": "Reversal candle at a real level with volume confirmation.",
+    "sector_rotation": "Capital rotating into relative strength and out of laggards.",
+    "sentiment_contrarian": "Fear/greed setup, but only after price stabilizes.",
+    "macro_risk_on": "Rates/USD/liquidity favor risk assets. Broad risk-on posture.",
+    "macro_risk_off": "Risk-off macro. Reduce longs or use confirmed downside tools.",
+    "gold_macro_proxy": "Gold proxy. Small defensive allocation when macro and trend agree.",
+    "pump_and_dump_avoidance": "Manipulation risk. Skip/quarantine, never chase.",
     "gap_and_go": "Gapped up on news at the open and kept running. Momentum chad. 🏃",
     "momentum_breakout": "Broke above prior-day high on volume. Buying strength, not hope.",
     "ema_vwap_cross": "Fast EMA crossed up + reclaimed VWAP. The 'trend just turned' play.",
@@ -1174,6 +1187,9 @@ TV_SYMBOLS = {
     "SQQQ":     "NASDAQ:SQQQ",
     "SPY":      "AMEX:SPY",
     "QQQ":      "NASDAQ:QQQ",
+    "IWM":      "AMEX:IWM",
+    "GLD":      "AMEX:GLD",
+    "TLT":      "NASDAQ:TLT",
 }
 
 def render_tv_chart(sym_key, interval, height):
