@@ -2163,6 +2163,47 @@ def _option_exit_decision(sym: str, pnl_pct: float) -> tuple:
     return (None, "")
 
 
+def _minutes_to_equity_close():
+    """Minutes until the equity session closes per the Alpaca clock, or None if the
+    market is closed or the clock can't be read. Used to gate the pre-close leveraged
+    flatten — None (unreachable) fails SAFE: no forced flatten, the normal stop still
+    applies."""
+    try:
+        clock = trade.get_market_status()
+        if not clock.get("is_open"):
+            return None
+        nc = clock.get("next_close")
+        if not nc:
+            return None
+        from datetime import datetime, timezone
+        close_dt = datetime.fromisoformat(str(nc).replace("Z", "+00:00"))
+        return (close_dt - datetime.now(timezone.utc)).total_seconds() / 60.0
+    except Exception:
+        return None
+
+
+def _leveraged_overnight_flatten_due(sym: str, pnl_pct: float, mins_to_close) -> bool:
+    """True when a RED leveraged-LONG ETF should be flattened before the close instead of
+    carried overnight. A 3x leveraged long has decay + amplified gap risk overnight (the
+    SOP already force-liquidates UVXY overnight for the same reason); carrying one while
+    underwater is the dominant avg-loss driver (losers gap past the -3% stop overnight).
+    Only fires: leveraged longs (TQQQ/SOXL/FNGU/LABU/FAS), red beyond the configured
+    buffer, in the final pre-close window. Winners/flat and non-leveraged names: never.
+    Config-gated (trading_style.flatten_red_leveraged_before_close, default on)."""
+    ts = trading_style()
+    if not ts.get("flatten_red_leveraged_before_close", True):
+        return False
+    if mins_to_close is None:
+        return False
+    window = float(ts.get("leveraged_close_window_min", 15))
+    if not (0 <= mins_to_close <= window):
+        return False
+    loss_limit = float(ts.get("leveraged_overnight_loss_pct", -0.5))
+    if pnl_pct > loss_limit:
+        return False
+    return normalize_symbol(sym) in _leveraged_long_symbols()
+
+
 def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
     """
     CODE-ENFORCED swing exits on every open position (equity AND crypto): hard stop,
@@ -2173,7 +2214,9 @@ def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
     paths can't drift (they once held the same unlogged-partial bug in two copies).
     `note_prefix` tags the learning-log exit notes with the calling routine (e.g.
     "Intraday ") for provenance; it does not change any exit logic.
-    Returns (action_strings, closed_normalized_symbols).
+    Additionally flattens a RED leveraged-long ETF in the final pre-close window so a 3x
+    decaying instrument is not carried overnight to gap past its stop (see
+    _leveraged_overnight_flatten_due). Returns (action_strings, closed_normalized_symbols).
     """
     actions, closed = [], set()
     if not positions:
@@ -2185,6 +2228,9 @@ def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
     # (holiday-aware), not the time-based market_phase() which labels a holiday as REGULAR
     # and would fire equity exits that can't fill (then get swept as stale).
     equity_open = trade.equities_open_now()
+    # Computed once per cycle (not per-position) — minutes until the equity close, for the
+    # pre-close leveraged-long flatten. None when closed/unreachable (fails safe).
+    mins_to_close = _minutes_to_equity_close() if equity_open else None
     for p in positions:
         sym = p.get("symbol")
         if not sym:
@@ -2238,6 +2284,13 @@ def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
             continue
 
         action, frac, reason = _swing_exit_decision(sym, pnl_pct, peaks)
+        # Pre-close override: a RED leveraged-long ETF that the normal rules would otherwise
+        # CARRY (action is None) gets flattened so it isn't held overnight to gap past its
+        # stop. Only escalates a non-exit into a full stop; never downgrades an existing
+        # stop/trail/partial. Logged as stop_loss with a clear reason.
+        if not action and not crypto and _leveraged_overnight_flatten_due(sym, pnl_pct, mins_to_close):
+            action, frac, reason = ("stop", 1.0,
+                f"pre-close flatten: red leveraged long {pnl_pct:+.1f}% not carried overnight (gap/decay guard)")
         if not action:
             continue
         sell_qty = qty if frac >= 1.0 else (round(qty * frac, 8) if crypto else max(1, int(qty * frac)))

@@ -72,6 +72,10 @@
     "trail_arm_pct": 5.0,
     "trail_giveback_pct": 4.0,
     "require_momentum_confirmation": true,
+    "flatten_red_leveraged_before_close": true,
+    "leveraged_overnight_loss_pct": -0.5,
+    "leveraged_close_window_min": 15,
+    "leveraged_overnight_note": "Risk guard (code-enforced in _manage_swing_exits): in the final leveraged_close_window_min minutes before the equity close, flatten any leveraged-LONG ETF (TQQQ/SOXL/FNGU/LABU/FAS) that is red beyond leveraged_overnight_loss_pct, so a 3x decaying instrument is not carried overnight to gap past its -3% stop (the dominant avg-loss driver: realized losses averaged -8.4% vs the -3% stop). Winners/flat and non-leveraged names are never touched; this only escalates a would-be carry into a stop. Set flatten_red_leveraged_before_close=false to disable.",
     "expanded_strategy_note": "Expanded Robust-Trader-inspired playbook is injected by scripts/strategy_playbook.py. Most strategies are vocabulary and context; buys still require setup_type, score, R:R, regime fit, liquidity, and all risk caps. Pump-and-dump is avoidance/quarantine only.",
     "approved_setups": [
       "long_hold_trend",
