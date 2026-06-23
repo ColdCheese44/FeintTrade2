@@ -3235,6 +3235,21 @@ def run_marketopen():
 
     account   = run("research.py", "account")
     positions = get_positions_norm()
+
+    # Cut any overnight-identified stop at the FIRST action of the session. A position
+    # that breached its swing stop after-hours — typically a leveraged ETF that drifted
+    # or gapped while equities were closed — should be flattened the instant the market
+    # opens, not whenever the first intraday cycle happens to run. _manage_swing_exits is
+    # idempotent (execution ledger + sells clamp to held qty) and no-ops when the broker
+    # clock says equities are still closed, so this is safe to run here unconditionally.
+    try:
+        mo_exits, _ = _manage_swing_exits(positions, note_prefix="MarketOpen ")
+        if mo_exits:
+            log.info(f"Market-open swing exits executed: {mo_exits}")
+            positions = get_positions_norm()           # refresh the book after flattening
+    except Exception as e:
+        log.warning(f"Market-open swing-exit pass failed: {e}")
+
     ctx       = _load_context()
     regime    = ctx["regime"]
 
