@@ -395,7 +395,7 @@ def run(fix=True, post=True):
         if not desc: desc.append("All systems healthy. ✅")
         try:
             dn.send(f"🩺 Diagnostics — {'HEALTHY' if r.healthy() else 'ISSUES'}",
-                    "\n".join(desc)[:4000], color=color)
+                    "\n".join(desc)[:4000], color=color, msg_type="dev_log")
         except Exception:
             pass
     return 0 if r.healthy() else 1
