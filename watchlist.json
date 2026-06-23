@@ -227,6 +227,12 @@
     "min_price": 1.5,
     "max_price": 2000,
     "default_max_alloc_pct": 12,
+    "scan_crypto_universe": true,
+    "crypto_max_candidates": 8,
+    "crypto_min_move_pct": 3.0,
+    "crypto_liquidity_top": 20,
+    "crypto_min_dollar_volume": 0,
+    "crypto_scan_note": "The screener scans the FULL Alpaca tradable crypto universe (~33 USD pairs) for daily movers each cycle — not just the ~7 CoinGecko-trending names. Liquidity is relative: pairs are ranked by prior-day dollar volume and only the most-liquid crypto_liquidity_top are eligible (robust to the paper feed's unreliable volume magnitudes), then those moving >= crypto_min_move_pct and traded today are surfaced. Stablecoin/pegged bases are excluded; gainers score above fallers (trend-following; contrarian crypto buying lost money). crypto_min_dollar_volume is an optional absolute floor (0=off on the paper feed; raise it on the real live feed). Set scan_crypto_universe=false to revert to trending-only.",
     "penny_risk": {
       "note": "Manipulation/liquidity guards for low-priced discovered names (ported from FeintTrade). A cheap stock spiking hard on the day is pump-and-dump-prone; thin share volume at a low price is untrustworthy.",
       "low_price_ceiling": 5.0,
