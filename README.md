@@ -10,7 +10,7 @@ dashboard, a Discord bot, and a desktop shell wrap it. **Paper only — not fina
 ## Architecture
 
 ```
-app.py            Desktop shell (pywebview): embeds the dashboard, "Discord/Alpaca" tab
+app.py            Desktop shell (pywebview): embeds the dashboard, "Command Center/Alpaca" tab
 dashboard.py      Streamlit UI (localhost:8501): clock, tickers, charts, positions+strategy, AI chat
 bot.py            FeintTrade Command Center bot — !commands, non-blocking; !heartbeat runs a full live cycle
 scripts/
@@ -41,7 +41,7 @@ durable order intent → Alpaca limit order → broker reconciliation → confir
 pip install -r requirements.txt
 python app.py                              # desktop app (starts the dashboard)
 # or just the dashboard:
-streamlit run dashboard.py
+.\run_dashboard.bat                       # starts Streamlit headless + opens Brave fullscreen
 # register the full Mountain-Time schedule (once, as Administrator):
 powershell -ExecutionPolicy Bypass -File register_all_tasks.ps1
 # manual one-offs:
@@ -49,6 +49,20 @@ python scripts/orchestrator.py cycle
 python scripts/diagnostics.py run
 python scripts/orchestrator.py report now
 ```
+
+## Browser launching
+Operator-facing browser windows prefer Brave in fullscreen mode. `app.py`, `launch.bat`,
+and `run_dashboard.bat` use `scripts/browser.py`, which falls back to the default browser
+if Brave is unavailable.
+
+```powershell
+$env:FEINT_BROWSER_MODE="fullscreen"      # fullscreen, maximized, normal, kiosk
+$env:FEINT_BROWSER_PATH="C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
+python scripts/browser.py open http://localhost:8501 --wait-url http://localhost:8501/_stcore/health
+```
+
+`FEINT_BROWSER=brave` is the default. Use `FEINT_BROWSER_PATH` for a custom Brave install
+or set `FEINT_BROWSER_MODE` when you need `maximized`, `normal`, or explicit `kiosk`.
 
 ## Key behaviors
 - **Side-aware risk:** sells always allowed (they de-risk); buys enforce cash reserve (5%),
