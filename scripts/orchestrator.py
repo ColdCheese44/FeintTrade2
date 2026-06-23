@@ -1658,12 +1658,45 @@ def _cancel_stale_orders(positions=None) -> list:
 
 # ── Data gathering ─────────────────────────────────────────────────────────────
 
+def _data_universe(crypto_only: bool = False) -> list:
+    """Static watchlist entries PLUS auto-promoted dynamic symbols, so a name the
+    marketwide scanner promoted gets ANALYZED with full indicators — not merely listed in
+    the discovery brief. Bounded by discovery.max_analyzed_dynamic to keep the fetch cheap.
+    Sizing/risk for these non-watchlist names is already handled by validate_order's
+    default discovery cap, so they only need a type + the default alloc here."""
+    wl = load_watchlist()
+    entries = list(wl.get("watchlist", []))
+    have = {normalize_symbol(s.get("symbol", "")) for s in entries}
+    try:
+        import watchlist_manager
+        disc = wl.get("discovery", {}) or {}
+        default_alloc = disc.get("default_max_alloc_pct", 12)
+        max_dyn = int(disc.get("max_analyzed_dynamic", 6) or 0)
+        for sym in (watchlist_manager.active_symbols() or [])[:max_dyn]:
+            if not sym or normalize_symbol(sym) in have:
+                continue
+            have.add(normalize_symbol(sym))
+            entries.append({
+                "symbol": sym,
+                "type": "crypto" if is_crypto(sym) else "equity",
+                "max_allocation_pct": default_alloc,
+                "regimes": ["BULL", "NEUTRAL"],
+                "strategies": [],
+                "source": "auto_discovery",
+            })
+    except Exception as e:
+        log.warning(f"Dynamic-watchlist merge skipped: {e}")
+    if crypto_only:
+        return [s for s in entries if is_crypto(s.get("symbol", ""))]
+    return entries
+
+
 def gather_market_data() -> dict:
-    """Pull all data for every watchlist symbol + macro context."""
+    """Pull all data for every watchlist symbol (+ auto-promoted discoveries) + macro."""
     watchlist = load_watchlist()
     research  = {}
 
-    for s in watchlist["watchlist"]:
+    for s in _data_universe():
         symbol = s["symbol"]
         log.info(f"Fetching: {symbol}")
         bars     = safe_run("research.py", "bars", symbol)
@@ -1730,13 +1763,12 @@ def gather_market_data() -> dict:
 
 
 def gather_crypto_data() -> dict:
-    """Pull full indicator suite for crypto symbols."""
-    watchlist = load_watchlist()
+    """Pull full indicator suite for crypto symbols (+ auto-promoted crypto discoveries)."""
     account   = run("research.py", "account")
     positions = get_positions_norm()
     research  = {}
 
-    for s in watchlist["watchlist"]:
+    for s in _data_universe(crypto_only=True):
         symbol = s["symbol"]
         if not is_crypto(symbol):
             continue

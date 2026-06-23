@@ -227,6 +227,8 @@
     "min_price": 1.5,
     "max_price": 2000,
     "default_max_alloc_pct": 12,
+    "max_analyzed_dynamic": 6,
+    "max_analyzed_dynamic_note": "How many auto-promoted (dynamic-watchlist) symbols get the FULL indicator fetch in gather_market_data/gather_crypto_data, so promotions are actually analyzed — not just listed in the brief. Bounded to keep the daily research fetch cheap. Risk/sizing for these non-watchlist names is handled by validate_order's default_max_alloc_pct cap.",
     "scan_crypto_universe": true,
     "crypto_max_candidates": 8,
     "crypto_min_move_pct": 3.0,
