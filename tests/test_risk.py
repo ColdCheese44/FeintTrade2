@@ -253,6 +253,27 @@ class TestValidationModeCaps:
         assert "altcoin" in msg.lower() or "3" in msg
 
 
+class TestResearchModeOverlayTightensOnly:
+    """The paper-only research overlay may TIGHTEN caps but must never raise the
+    crypto-exposure cap above the documented 40% HARD CONSTRAINT (CLAUDE.md)."""
+
+    def test_overlay_cannot_raise_crypto_cap_above_normal(self, monkeypatch):
+        # Overlay tries to widen crypto exposure to 50% (>40% documented hard cap).
+        monkeypatch.setattr(common, "research_mode",
+                            lambda: {"enabled": True, "max_crypto_exposure_pct": 50})
+        caps = get_effective_caps(50)  # normal mode
+        assert caps["research_mode"] is True
+        assert caps["max_crypto_exposure_pct"] <= 40, (
+            "research overlay must not raise crypto cap above the 40% hard cap")
+
+    def test_overlay_can_still_tighten_crypto_cap(self, monkeypatch):
+        # A tighter overlay value (30%) is honored.
+        monkeypatch.setattr(common, "research_mode",
+                            lambda: {"enabled": True, "max_crypto_exposure_pct": 30})
+        caps = get_effective_caps(50)
+        assert caps["max_crypto_exposure_pct"] == 30
+
+
 # ── 5. Duplicate-entry cooldown ───────────────────────────────────────────────
 
 class TestDuplicateEntryCooldown:

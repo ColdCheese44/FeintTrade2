@@ -568,12 +568,20 @@ def get_effective_caps(completed_trades: int = None) -> dict:
     # Aggressive research-mode overlay (paper-only): widen the hard caps so the
     # agent can propose and execute more for data collection. Cash reserve and
     # per-symbol watchlist allocations are intentionally left untouched.
+    caps_before_overlay = dict(caps)
     rm = research_mode()
     if rm:
         for key in ("max_open_positions", "max_crypto_exposure_pct",
                     "max_single_crypto_pct", "max_altcoin_exposure_pct", "min_buy_score"):
             if rm.get(key) is not None:
                 caps[key] = rm[key]
+        # Crypto exposure ≤ 40% is a documented HARD CONSTRAINT (see CLAUDE.md).
+        # The research overlay may TIGHTEN it but must never raise it above the
+        # pre-overlay (normal/validation) cap — overlays tighten, never loosen.
+        normal_crypto_cap = caps_before_overlay.get("max_crypto_exposure_pct")
+        if normal_crypto_cap is not None and caps.get("max_crypto_exposure_pct") is not None:
+            caps["max_crypto_exposure_pct"] = min(
+                caps["max_crypto_exposure_pct"], normal_crypto_cap)
         caps["research_mode"] = True
     else:
         caps["research_mode"] = False
