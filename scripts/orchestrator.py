@@ -782,6 +782,55 @@ def _notify_decision_executed(routine: str, payload: dict,
         log.warning(f"Decision-executed notification failed for {routine}: {e}")
 
 
+def _float_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_crypto_trend_gate(order_data: dict, research_ind: dict | None,
+                             collect_events: list | None = None) -> list[str]:
+    """
+    Block crypto BUYs when the daily trend is bearish (EMA9 < EMA21), and surface
+    that block the same way the later execution gates do. The proposal has already
+    been posted at this point, so a quiet drop makes Discord look like it missed a
+    trade even though no broker order was submitted.
+    """
+    kept, blocked = [], []
+    research_ind = research_ind or {}
+    for order in order_data.get("orders", []):
+        side = str(order.get("side", "buy")).lower()
+        sym = normalize_symbol(order.get("symbol", ""))
+        if side == "buy":
+            ind = research_ind.get(order.get("symbol")) or research_ind.get(sym) or {}
+            ema9 = _float_or_none(ind.get("ema9"))
+            ema21 = _float_or_none(ind.get("ema21"))
+            if ema9 is not None and ema21 is not None and ema9 < ema21:
+                msg = (
+                    f"BUY BLOCKED - {sym}: crypto daily trend gate failed "
+                    f"(EMA9 {ema9:g} < EMA21 {ema21:g}). Proposal posted, "
+                    "but no broker order was submitted."
+                )
+                blocked.append(sym)
+                log.info(msg)
+                print(f"  REJECTED (crypto-trend): {sym} - {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": order.get("qty", 0)}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym,
+                        "side": side,
+                        "status": "rejected",
+                        "message": msg,
+                    })
+                continue
+        kept.append(order)
+    if blocked:
+        log.info(f"Crypto trend gate: blocked downtrend buy(s) {blocked} (daily EMA9<EMA21)")
+        order_data["orders"] = kept
+    return blocked
+
+
 def _notify_research_outputs(analysis: str, ctx: dict, regime: dict | None = None):
     """
     Fan the morning research out to the dedicated operator channels (once per run,
@@ -2620,19 +2669,7 @@ Then provide concise bullets summarizing the strongest score, weakest score, and
             # trying to catch falling knives on the "extreme fear" thesis (e.g. BTC at
             # RSI 15, EMA9 far below EMA21) — exactly the -$2,190 / 0%-WR losing pattern.
             research_ind = data.get("research") or {}
-            kept, blocked = [], []
-            for o in order_data.get("orders", []):
-                if str(o.get("side", "buy")).lower() == "buy":
-                    nsym = normalize_symbol(o.get("symbol", ""))
-                    ind = research_ind.get(o.get("symbol")) or research_ind.get(nsym) or {}
-                    e9, e21 = ind.get("ema9"), ind.get("ema21")
-                    if e9 is not None and e21 is not None and float(e9) < float(e21):
-                        blocked.append(o.get("symbol"))
-                        continue
-                kept.append(o)
-            if blocked:
-                log.info(f"Crypto trend gate: blocked downtrend buy(s) {blocked} (daily EMA9<EMA21)")
-                order_data["orders"] = kept
+            _apply_crypto_trend_gate(order_data, research_ind, execution_events)
 
             price_lookup = {
                 normalize_symbol(sym): (
