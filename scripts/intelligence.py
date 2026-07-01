@@ -24,13 +24,16 @@ META_FILE = DATA_DIR / "intelligence_meta.json"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 try:
-    from common import is_crypto, normalize_symbol
+    from common import is_crypto, is_option, normalize_symbol
 except Exception:
     def normalize_symbol(symbol, asset_class=None):
         return str(symbol or "")
 
     def is_crypto(symbol, asset_class=None):
         return "/" in str(symbol or "")
+
+    def is_option(symbol):  # type: ignore[misc]
+        return False
 
 try:
     from research import get_bars, get_hourly_bars
@@ -300,7 +303,11 @@ def log_decision_batch(
             "timestamp": decision_ts.isoformat(),
             "routine": routine,
             "symbol": symbol,
-            "asset_type": "crypto" if is_crypto(symbol) else "equity",
+            "asset_type": (
+                "crypto" if is_crypto(symbol)
+                else "option" if (is_option(symbol) or symbol.upper().endswith("_OPTIONS"))
+                else "equity"
+            ),
             "action": action,
             "setup_type": candidate.get("setup_type", "unknown") or "unknown",
             "conviction": _int_or_none(candidate.get("conviction")),
@@ -358,6 +365,12 @@ def _fetch_eval_bars(symbol: str, asset_type: str) -> list[dict]:
             return []
         data = get_hourly_bars(symbol, limit=96) or {}
         return data.get("bars") or []
+    # Options (OCC symbols or _OPTIONS placeholders) have no equity bar endpoint;
+    # skip bar fetch rather than issuing a guaranteed-400 request to Alpaca.
+    # Also guard legacy records stored before the "option" asset_type was introduced,
+    # which arrived with asset_type="equity" but an un-fetchable symbol.
+    if asset_type == "option" or is_option(symbol) or symbol.upper().endswith("_OPTIONS"):
+        return []
     if get_bars is None:
         return []
     data = get_bars(symbol, timeframe="1Day", limit=30) or {}

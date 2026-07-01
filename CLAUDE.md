@@ -39,7 +39,7 @@ Where this section conflicts with anything below, THIS WINS. (`trading_style` in
    RELEASE** (not active/coiling/bearish), MACD bullish, price reclaiming/above VWAP, OBV rising,
    volume pickup, in an up-trending name (EMA9>EMA21>EMA50). **Do NOT buy extreme-fear dips, falling
    knives, coiling squeezes, or below-VWAP weakness.** If nothing confirms, hold cash.
-3. **Reward:Risk ≥ 2.5:1.** Define entry, stop, target before entering.
+3. **Reward:Risk ≥ the configured minimum** (`trading_style.min_reward_risk`, currently **2:1**; prompts read this value live so doc and config can't drift). Define entry, stop, target before entering.
 4. **Cut losers FAST at −3%** (tighter than regime −5%); never average down. **Let winners run:**
    take partial (~half) near +10%, then trail the rest — give back at most 4% from the peak.
    (Aggressive profile: winners run further before trimming; the −3% loss cut is unchanged.)
@@ -53,7 +53,9 @@ in service of the swing rules above. Ignore the "close equity by 1:45 PM" / day-
 
 **Time zone:** All times are U.S. Mountain — **MDT** (summer, UTC−6) / **MST** (winter, UTC−7).
 The code auto-detects which via `America/Denver`; timestamps carry the live label. Market open
-07:30, equity flatten 1:45 PM, regular close 2:00 PM, extended close 6:00 PM (all Mountain).
+07:30, regular close 2:00 PM, extended close 6:00 PM (all Mountain). Under SWING mode there is
+**no forced equity flatten** — positions are held multi-day while the thesis holds (the only
+code-enforced same-session liquidation is the no-overnight UVXY rule in the after-hours wrap).
 
 ---
 
@@ -75,7 +77,15 @@ The code auto-detects which via `America/Denver`; timestamps carry the live labe
   are exempt, so a risk-off SQQQ/SOXS posture is never throttled. (code-enforced)
 - Leveraged LONG ETFs (TQQQ/SOXL/FNGU/LABU/FAS) cannot be bought in BEAR or PANIC regime —
   use an inverse ETF (SQQQ/SOXS) for downside instead. (code-enforced)
-- Daily drawdown thresholds are advisory in paper trading and enforced in live trading.
+- Leveraged INVERSE ETFs (SOXS/SQQQ/UVXY) cannot be bought in a BULL regime — fading an
+  up-trending tape with a decaying −3x inverse, then swing-holding it, lost −$1,670 at a 0%
+  win rate (SOXS −$1,608 held ~4 days). Inverse ETFs are downside trades: NEUTRAL/BEAR/PANIC
+  only, and never swing-held multi-day (volatility decay). (code-enforced; mirror of the
+  leveraged-long rule above)
+- Daily drawdown soft/hard stops are **code-enforced** whenever `risk.disable_daily_stops_in_paper=false`
+  (the current setting) — including on paper. At the soft threshold new buys are blocked; at the hard
+  threshold the book goes reduce-only. Set `disable_daily_stops_in_paper=true` to make them advisory on
+  paper only; live is always enforced regardless. (see `common.daily_stops_enforced`)
 - Limit orders only. Honor `kill.flag`. Stops are mandatory at the regime threshold.
 - The system applies the regime multiplier to every BUY automatically — size at FULL
   `max_allocation_pct × conviction_factor` and do NOT pre-multiply.
@@ -127,6 +137,13 @@ Rules: SQQQ is the primary bear trade. UVXY = intraday only (hours max), panic h
 NVDA (30%), AMD (25%), TSLA (25%), MSTR (20%), COIN (20%), PLTR (20%)
 
 Rules: Gap-and-go and breakout plays. News catalyst required for >20% allocation. Earnings within 3 days = reduce size by 75% or skip.
+
+### Broad / Macro ETF Proxies
+SPY (15%), QQQ (18%), IWM (12%), GLD (10%), TLT (10%)
+
+Rules: Use these for broad-market, Nasdaq, Russell 2000, sector/asset rotation, gold,
+fixed-income, macro risk-on/risk-off, sentiment, overnight, and long-hold trend strategies.
+They are lower-beta tools than 3x ETFs; still require score, R:R, regime fit, and limit orders.
 
 ### Crypto (24/7, Scored System)
 BTC/USD (35%), ETH/USD (25%), SOL/USD (20%), DOGE/USD (15%), AVAX/USD (15%), LINK/USD (15%), XRP/USD (15%)
@@ -231,7 +248,7 @@ Signals required (3+ of 4):
 Entry: Buy limit on first 5-min pullback to VWAP or opening range high, within 0.2% of ask
 Target: Gap extension — prior day range x 1.5, or previous resistance
 Stop: Below 5-min opening bar low (or regime stop %, whichever is closer)
-Exit: At target or by 1:45 PM MT
+Exit: At target, on stop, or thesis break (SWING — no forced 1:45 PM flatten)
 Best instruments: TQQQ, SOXL, NVDA, TSLA, MSTR, LABU
 Skip if: Gap fills immediately, no volume confirmation, earnings within 3 days without confirmed beat
 
@@ -249,7 +266,7 @@ Signals required (3+ of 4):
 Entry: Buy limit on the candle that closes above VWAP
 Target: 1x ATR14 above VWAP, or next pivot R1 level
 Stop: Below VWAP (price losing VWAP = thesis invalid)
-Exit: Target, VWAP failure, or 1:45 PM MT
+Exit: Target, VWAP failure, or thesis break (SWING — no forced 1:45 PM flatten)
 Best instruments: NVDA, AMD, PLTR, TQQQ (BULL), TSLA
 Skip if: RSI >70 at entry, volume declining, daily EMA is bearish
 
@@ -268,7 +285,7 @@ Signals required (4+ of 5):
 Entry: Buy limit within 0.2% of the breakout level
 Target: Previous day high + ATR14
 Stop: Just below previous day's high (now support)
-Exit: Target, RSI >80, or 1:45 PM MT
+Exit: Target, RSI >80, or thesis break (SWING — no forced 1:45 PM flatten)
 Best instruments: TQQQ, SOXL, NVDA, TSLA, PLTR
 Skip if: Breakout on low volume, already up >8%, no daily trend support
 
@@ -365,7 +382,7 @@ Best instruments: BTC/USD, ETH/USD, NVDA, AMD
 
 ---
 
-### Strategy 9: Crypto Scored System (24/7 hourly)
+### Strategy 9: Crypto Scored System (24/7, scored every cycle — every 30 min)
 Every crypto cycle scores each symbol 1-10 using this rubric:
 
 | Signal | Points |
@@ -413,8 +430,40 @@ Signals required (same as Momentum Breakout but inverted):
 Entry: Buy SQQQ on the breakdown bar, or UVXY if VIX spiking rapidly
 Target: SQQQ equivalent of 8-15% move
 Stop: -3% from entry in BEAR regime
-Exit: Target, regime shifts back to NEUTRAL, or 1:45 PM MT
+Exit: Target, regime shifts back to NEUTRAL, or thesis break (SWING — no forced 1:45 PM flatten; UVXY never overnight)
 Critical: UVXY is intraday only — never hold overnight. It decays rapidly.
+
+---
+
+## EXPANDED STRATEGY PLAYBOOK (Robust-Trader families mapped to FeintTrade)
+
+The agent should understand the full strategy vocabulary: swing, volatility, S&P 500,
+overnight, day trading, mean reversion, Nasdaq, fixed income, candlesticks, treasuries,
+technical indicators, Russell 2000, seasonality, sector rotation, momentum, trend following,
+Connors/RSI2, trend reversal, sentiment, moving averages, macro, bear market,
+market-neutral, breakout, volatility indicators, oscillators, price action, mixed indicators,
+gold, and forex. But it may only place orders through supported Alpaca symbols and setup types.
+
+Executable FeintTrade setup labels:
+- `long_hold_trend`: position-style trend hold; score >= 7, trail winners, no clock-based exits.
+- `swing_momentum`: core multi-day momentum setup; score >= 6, R:R >= 2:1.
+- `day_trade_momentum`: same-session momentum; score >= 8, high liquidity, explicit catalyst.
+- `scalp_liquidity`: minutes-long scalp; score >= 8, tight spread, strict stop, no lingering.
+- `overnight_momentum`: strong-close/catalyst carry; score >= 7 and gap risk must be paid.
+- `volatility_breakout`: ATR/volatility expansion after a coil; score >= 7.
+- `price_action_reversal`: candle reversal at a meaningful level with volume; score >= 7.
+- `sector_rotation`: rotate toward relative strength using liquid ETFs/leaders.
+- `sentiment_contrarian`: fear/greed only after price stabilizes; sentiment alone is never enough.
+- `macro_risk_on` / `macro_risk_off`: use SPY/QQQ/IWM/TLT/GLD/inverse ETFs as liquid proxies.
+- `gold_macro_proxy`: GLD-style defensive/macro setup; small, incubated, trend-confirmed.
+
+Advisory-only until execution support exists:
+- `market_neutral_pair` (needs paired/hedged order primitive)
+- `forex_macro_proxy` (spot FX unsupported)
+
+Forbidden as an entry:
+- `pump_and_dump`, `pump_dump`, or any pump-and-dump wording. Treat suspected pumps as
+  manipulation/liquidity risk: skip, quarantine, or use `pump_and_dump_avoidance` as a blocker.
 
 ---
 
@@ -422,10 +471,10 @@ Critical: UVXY is intraday only — never hold overnight. It decays rapidly.
 
 1. Limit orders only — never market orders. Within 0.2% of ask for buys.
 2. Stop-loss = regime stop — BULL: -5%, NEUTRAL: -4%, BEAR: -3%, PANIC: -2%. No averaging down. No exceptions.
-3. Daily drawdown limit: In live trading, portfolio down 6% from session open equity = halt all new entries. In paper trading, treat this as a caution threshold and tighten selectivity rather than forcing reduce-only mode.
+3. Daily drawdown limit: code-enforced soft/hard stops measured from session-open equity. In NORMAL mode the soft stop (−4%) blocks new buys and the hard stop (−6%) makes the book reduce-only; validation mode uses tighter −2%/−3% thresholds. These are ENFORCED on paper while `risk.disable_daily_stops_in_paper=false` (current setting) and always enforced live. Existing stops/exits keep running; thresholds reset each session.
 4. Cash reserve: Maintain 5% cash at all times. Never deploy 100%.
 5. Max open positions: 8 simultaneously. Quality over quantity.
-6. Close equity by 1:45 PM MT — no exceptions unless a specific overnight catalyst is written in the journal with target and thesis.
+6. SWING holds — there is **no forced intraday/EOD equity flatten** (the old day-trade 1:45 PM flatten is removed). Carry positions multi-day while the thesis and trend hold; exit only on the stop, a trailing-stop give-back, or a thesis break. The sole code-enforced same-session liquidation is the no-overnight UVXY rule (rule 8).
 7. Earnings risk: Earnings within 3 days = reduce size by 75% or skip.
 8. No UVXY overnight — it decays rapidly. Enter and exit same session.
 9. Correlation limit: Never hold more than 4 positions in the same sector simultaneously (e.g., TQQQ + SOXL + FNGU + NVDA = 4 tech longs = maximum).
@@ -520,11 +569,14 @@ Registered by `register_all_tasks.ps1`. The flow is **research → synthesis (jo
 | 7:45 AM | Morning Research (writes journal) | run_research.bat → research |
 | 8:00 AM | Trading Session (reads journal, decides) | run_trading.bat → trading |
 | Every 15 min (7:30–2:00) | Intraday Cycle (fresh data, stops, entries) | run_intraday.bat → cycle |
-| 1:45 PM | Equities flatten | (enforced by cycle/EOD) |
-| 2:15 PM | End of Day + detailed report | run_eod.bat → eod |
+| 2:15 PM | End of Day + detailed report (SWING — no forced flatten) | run_eod.bat → eod |
 | 6:15 PM | After-hours wrap + detailed report | run_afterhours.bat → afterhours |
-| Hourly, 24/7 | Crypto Cycle | run_crypto.bat → crypto |
-| Hourly, 24/7 | Market Research (free-source synthesis → strategy bias) | run_market_research.bat → market_research.py |
+| Every 30 min, 24/7 | Crypto Cycle | run_crypto.bat → crypto |
+| Every 2h, 24/7 | Market Research (free-source synthesis → strategy bias) | run_market_research.bat → market_research.py |
+| 6:30 AM Monday | Weekly Review (intel audit + strategy lab + benchmark → Discord) | run_weekly_review.bat → weekly_review.py |
+| 2:00 AM daily | Nightly State Backup (data/ + journal/ → backups/, keep 14) | run_backup.bat → backup_state.py |
+| 7:00 PM daily | Claude Maintenance — headless Claude (sonnet) analyzes trade logs, debugs, verifies Discord, autofixes (commits to branch, keeps a PR open, posts to #ft-reports) | run_claude_maintenance.bat → claude -p `.claude/prompts/daily_maintenance.md` |
+| 5:00 PM Sunday | Claude Weekly Deep Review — headless Claude (opus) deep performance/strategy analysis + tuning + human-review recommendations → #ft-reports | run_claude_weekly.bat → claude -p `.claude/prompts/weekly_deep_review.md` |
 | At logon | Discord bot (`!heartbeat` runs a full cycle) | run_bot.bat |
 
 Both the EOD (2:15 PM) and after-hours (6:15 PM) routines post a **detailed, exportable report**
@@ -551,12 +603,12 @@ Operator output is routed by message TYPE to dedicated Discord channels (ported 
 FeintTrade). The agent does not address channels directly — it calls the typed
 `discord_notify` helpers and `scripts/discord_channels.py` routes each to the right
 channel via the bot API, with severity cooldowns + dedup and a
-target → command-post → webhook fallback. **Notify-only: channels mirror what the
+target → command-center → webhook fallback. **Notify-only: channels mirror what the
 agent decides/does; they never gate execution (FeintTrade stays autonomous).**
 
 | Channel | Receives |
 |---------|----------|
-| `ft-command-post` | heartbeats, market/regime summary |
+| `ft-command-center` | heartbeats, market/regime summary, per-routine `!status` snapshot (equity / day P&L / cash / positions) after every cycle/trade/research — internal compatibility key remains `command_post`; toggle via `discord.command_post_status_updates` |
 | `ft-signals` | trade proposals, marketwide-discovery scan |
 | `ft-approvals` | decision cards (notify-only; auto-executes) |
 | `ft-trade-log` | placed orders, executed decisions, take-profits |
@@ -569,8 +621,8 @@ agent decides/does; they never gate execution (FeintTrade stays autonomous).**
 
 Config: channel IDs in `.env` (`DISCORD_CH_*`), routing/policy in `watchlist.json`
 `discord` block. Set `discord.multichannel_enabled=false` to revert to the single
-legacy webhook. The bot user ("TradeBot") must remain a member of the server holding
-these channels.
+legacy webhook. The bot user ("Stonks", formerly "TradeBot") must remain a member of the
+server holding these channels.
 
 ---
 

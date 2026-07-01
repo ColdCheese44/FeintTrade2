@@ -12,7 +12,6 @@ falls back to the documented safe default (NEUTRAL), still honoring a clear VIX 
 reading, and a healthy SPY read still scores normally.
 """
 
-import importlib
 import sys
 from pathlib import Path
 

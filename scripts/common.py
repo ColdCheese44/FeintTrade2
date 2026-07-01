@@ -28,15 +28,33 @@ except Exception:
 ROOT = Path(__file__).parent.parent
 
 
-def make_http_session(total: int = 4, backoff: float = 0.5) -> requests.Session:
+class _TimeoutSession(requests.Session):
+    """A Session that applies a DEFAULT timeout to any request that doesn't pass one,
+    so a forgotten `timeout=` can never hang a caller indefinitely (the dashboard had
+    several timeout-less calls that could block the whole page on a slow socket). An
+    explicit `timeout=` always wins."""
+
+    def __init__(self, default_timeout: float = 15):
+        super().__init__()
+        self._default_timeout = default_timeout
+
+    def request(self, *args, **kwargs):  # noqa: D102
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self._default_timeout
+        return super().request(*args, **kwargs)
+
+
+def make_http_session(total: int = 4, backoff: float = 0.5,
+                      default_timeout: float = 15) -> requests.Session:
     """
     A requests.Session that rides out transient DNS/connection blips (e.g. a VPN
     tunnel reconnecting) by retrying with exponential backoff. Only IDEMPOTENT
     methods are retried (urllib3 default: GET/HEAD/DELETE/etc.) — POST is NOT, so
-    order placement can never be double-submitted by a retry. Falls back to a
-    plain session if urllib3's Retry is unavailable.
+    order placement can never be double-submitted by a retry. Every request also gets
+    a default timeout (override per-call with `timeout=`). Falls back to a plain
+    session if urllib3's Retry is unavailable.
     """
-    session = requests.Session()
+    session = _TimeoutSession(default_timeout=default_timeout)
     if Retry is not None:
         retry = Retry(
             total=total, connect=total, read=total, status=total,
@@ -352,6 +370,34 @@ def swing_stop_pct() -> float:
         return -3.0
 
 
+# ── Conviction-based position sizing factor ───────────────────────────────────
+# Single source of truth for the POSITION SIZING formula in CLAUDE.md and the
+# research auto-buy. The model is instructed to size at
+#     equity × max_allocation_pct × conviction_factor(score),
+# and the system multiplies by the regime multiplier. Enforcing this factor
+# DETERMINISTICALLY (orchestrator._execute_orders) is what stops a model order whose
+# JSON qty ignores its own conviction sizing from placing an oversized position —
+# e.g. the score-6 TQQQ order that wrote "Correcting: qty=257" in its reasoning but
+# emitted "qty": 461 in JSON. Aggressive profile (watchlist.json trading_style.profile).
+def conviction_factor(score, default=None):
+    """Position-sizing multiplier (0 < f <= 1) for a conviction/score of 1-10:
+        9-10 -> 1.00,  7-8 -> 0.85,  5-6 -> 0.55,  below 5 -> 0.30.
+    Returns `default` when `score` is not a usable number, so callers can choose the
+    fallback (e.g. 1.0 = apply no conviction reduction, leaving only the hard
+    allocation cap to bind)."""
+    try:
+        s = int(round(float(score)))
+    except (TypeError, ValueError):
+        return default
+    if s >= 9:
+        return 1.00
+    if s >= 7:
+        return 0.85
+    if s >= 5:
+        return 0.55
+    return 0.30
+
+
 def load_live_account() -> dict:
     """
     Live-trading sizing profile. When enabled, the agent should size as if the
@@ -454,6 +500,9 @@ SECTOR_MAP = {
     "MSTR": "crypto_equity", "COIN": "crypto_equity",
     # Single-name leveraged sector ETFs (own buckets).
     "LABU": "biotech", "FAS": "financials",
+    # Broad-market and macro proxies added for expanded strategy coverage.
+    "SPY": "broad_market", "QQQ": "tech", "IWM": "small_cap",
+    "GLD": "precious_metals", "TLT": "fixed_income",
 }
 
 
@@ -519,12 +568,20 @@ def get_effective_caps(completed_trades: int = None) -> dict:
     # Aggressive research-mode overlay (paper-only): widen the hard caps so the
     # agent can propose and execute more for data collection. Cash reserve and
     # per-symbol watchlist allocations are intentionally left untouched.
+    caps_before_overlay = dict(caps)
     rm = research_mode()
     if rm:
         for key in ("max_open_positions", "max_crypto_exposure_pct",
                     "max_single_crypto_pct", "max_altcoin_exposure_pct", "min_buy_score"):
             if rm.get(key) is not None:
                 caps[key] = rm[key]
+        # Crypto exposure ≤ 40% is a documented HARD CONSTRAINT (see CLAUDE.md).
+        # The research overlay may TIGHTEN it but must never raise it above the
+        # pre-overlay (normal/validation) cap — overlays tighten, never loosen.
+        normal_crypto_cap = caps_before_overlay.get("max_crypto_exposure_pct")
+        if normal_crypto_cap is not None and caps.get("max_crypto_exposure_pct") is not None:
+            caps["max_crypto_exposure_pct"] = min(
+                caps["max_crypto_exposure_pct"], normal_crypto_cap)
         caps["research_mode"] = True
     else:
         caps["research_mode"] = False

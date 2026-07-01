@@ -7,6 +7,7 @@ layer). When multichannel is disabled or the bot token is absent, discord_channe
 falls back to the single DISCORD_WEBHOOK_URL, preserving the original behavior.
 """
 
+import json
 import os
 import time
 import requests
@@ -14,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent.parent / ".env", override=True)
+_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_ROOT / ".env", override=True)
 
 try:
     import discord_channels as dch
@@ -57,6 +59,39 @@ def _portfolio_pnl():
         return val
     except Exception:
         return _pnl_cache["val"]
+
+
+_acct_cache = {"ts": 0.0, "val": None}
+_pos_cache  = {"ts": 0.0, "val": None}
+_HEADERS_RO = {"APCA-API-KEY-ID": _ALPACA_KEY, "APCA-API-SECRET-KEY": _ALPACA_SECRET}
+
+
+def _fetch_account():
+    """Full Alpaca account dict, cached ~20s. {} on failure."""
+    now = time.time()
+    if _acct_cache["val"] is not None and now - _acct_cache["ts"] < 20:
+        return _acct_cache["val"]
+    try:
+        r = requests.get(f"{_BASE_URL}/v2/account", headers=_HEADERS_RO, timeout=8)
+        r.raise_for_status()
+        _acct_cache.update(ts=now, val=r.json())
+        return _acct_cache["val"]
+    except Exception:
+        return _acct_cache["val"] or {}
+
+
+def _fetch_positions():
+    """Live Alpaca positions list, cached ~20s. [] on failure."""
+    now = time.time()
+    if _pos_cache["val"] is not None and now - _pos_cache["ts"] < 20:
+        return _pos_cache["val"]
+    try:
+        r = requests.get(f"{_BASE_URL}/v2/positions", headers=_HEADERS_RO, timeout=8)
+        r.raise_for_status()
+        _pos_cache.update(ts=now, val=r.json())
+        return _pos_cache["val"]
+    except Exception:
+        return _pos_cache["val"] or []
 
 
 def _pnl_field():
@@ -129,26 +164,59 @@ def heartbeat(routine, status="ok", notes=""):
     send(
         msg_type="heartbeat",
         title=f"{icon} Heartbeat — {routine}",
-        description=notes or f"{routine} completed at {datetime.now().strftime('%H:%M MT')}",
+        description=(notes or f"{routine} completed at {datetime.now().strftime('%H:%M MT')}")
+                    + ("" if status == "ok" else "\n⚠️ Status not OK — check #ft-dev-log."),
         color=color,
+        fields=_with_pnl(None),   # show live equity + day/all-time P&L at a glance
     )
 
 
 def trade_placed(order, result):
-    side  = order.get("side", "").upper()
+    side  = str(order.get("side", "")).upper()
     color = GREEN if side == "BUY" else RED
     icon  = "🟢" if side == "BUY" else "🔴"
+    sym   = order.get("symbol", "?")
+    px    = order.get("limit_price")
+    setup = order.get("setup_type") or "—"
+    conv  = order.get("conviction", order.get("score"))
+    sig   = (order.get("signals") or {}).get("signal_count")
+
+    fields = [
+        {"name": "Setup",  "value": str(setup),                         "inline": True},
+        {"name": "Status", "value": result.get("status", "submitted"),  "inline": True},
+    ]
+    quality = []
+    if conv not in (None, ""):
+        quality.append(f"conviction {conv}/10")
+    if sig not in (None, ""):
+        quality.append(f"{sig} signals")
+    if quality:
+        fields.insert(1, {"name": "Quality", "value": " · ".join(quality), "inline": True})
+
+    # Risk plan (stop / target / R:R) when the model supplied it — the most important
+    # numbers on a trade post: where we're wrong and what we're playing for.
+    stop   = order.get("stop") or order.get("stop_price")
+    target = order.get("target") or order.get("target_price")
+    if stop or target:
+        rp = []
+        if stop:
+            rp.append(f"🛑 stop {_fmt_price(stop)}")
+        if target:
+            rp.append(f"🎯 target {_fmt_price(target)}")
+        try:
+            if stop and target and px:
+                rr = abs(float(target) - float(px)) / abs(float(px) - float(stop))
+                rp.append(f"R:R {rr:.1f}:1")
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+        fields.append({"name": "Risk plan", "value": "  ·  ".join(rp), "inline": False})
+
     send(
         msg_type="trade",
-        title=f"{icon} Order Placed — {order.get('symbol')}",
-        description=order.get("reasoning", "")[:800],
+        title=f"{icon} {side} {order.get('qty')} {sym} @ {_fmt_price(px)}"[:240],
+        description=(order.get("reasoning") or "")[:700],
         color=color,
-        fields=_with_pnl([
-            {"name": "Side",        "value": side,                          "inline": True},
-            {"name": "Qty",         "value": str(order.get("qty")),          "inline": True},
-            {"name": "Limit Price", "value": f"${order.get('limit_price')}", "inline": True},
-            {"name": "Status",      "value": result.get("status", "submitted"), "inline": True},
-        ]),
+        fields=_with_pnl(fields),
     )
 
 
@@ -348,33 +416,39 @@ def decision_executed(routine, payload, orders_placed=None, closes_placed=None,
     )
 
 
+def _exit_fields(position):
+    qty = abs(float(position.get("qty", 0) or 0))
+    return [
+        {"name": "Entry",   "value": f"${float(position.get('avg_entry_price', 0) or 0):,.2f}", "inline": True},
+        {"name": "Current", "value": f"${float(position.get('current_price', 0) or 0):,.2f}",   "inline": True},
+        {"name": "Qty",     "value": f"{qty:g}",                                                 "inline": True},
+        {"name": "Realized P&L", "value": f"${float(position.get('unrealized_pl', 0) or 0):+,.2f}", "inline": True},
+    ]
+
+
 def stop_loss_alert(symbol, pnl_pct, position):
+    pl = float(position.get("unrealized_pl", 0) or 0)
     send(
         msg_type="stop_loss",
         dedup_key=f"stop_loss:{symbol}",
-        title=f"⚠️ Stop-Loss Triggered — {symbol}",
-        description=f"Position down **{pnl_pct:.1f}%** from entry. Closing position.",
+        title=f"🛑 Stop-Loss — {symbol} {pnl_pct:+.1f}% (${pl:+,.0f})",
+        description=(f"**{symbol}** hit its stop at **{pnl_pct:+.1f}%** (**${pl:+,.2f}**) — closing the position. "
+                     "Cutting losers fast is how the account survives; the first loss is the cheapest one."),
         color=RED,
-        fields=_with_pnl([
-            {"name": "Entry",   "value": f"${float(position.get('avg_entry_price', 0)):,.2f}", "inline": True},
-            {"name": "Current", "value": f"${float(position.get('current_price', 0)):,.2f}",   "inline": True},
-            {"name": "P&L",     "value": f"${float(position.get('unrealized_pl', 0)):+,.2f}",  "inline": True},
-        ]),
+        fields=_with_pnl(_exit_fields(position)),
     )
 
 
 def take_profit_alert(symbol, pnl_pct, position):
+    pl = float(position.get("unrealized_pl", 0) or 0)
     send(
         msg_type="take_profit",
         dedup_key=f"take_profit:{symbol}",
-        title=f"✅ Profit Target — {symbol}",
-        description=f"Position up **{pnl_pct:+.1f}%** from entry. Taking profit / closing.",
+        title=f"✅ Take-Profit — {symbol} {pnl_pct:+.1f}% (${pl:+,.0f})",
+        description=(f"**{symbol}** up **{pnl_pct:+.1f}%** (**${pl:+,.2f}**) — banking the gain / trimming. "
+                     "You never go broke taking profits; the runner stays on a trailed stop."),
         color=GREEN,
-        fields=_with_pnl([
-            {"name": "Entry",   "value": f"${float(position.get('avg_entry_price', 0)):,.2f}", "inline": True},
-            {"name": "Current", "value": f"${float(position.get('current_price', 0)):,.2f}",   "inline": True},
-            {"name": "P&L",     "value": f"${float(position.get('unrealized_pl', 0)):+,.2f}",  "inline": True},
-        ]),
+        fields=_with_pnl(_exit_fields(position)),
     )
 
 
@@ -397,25 +471,158 @@ def kill_deactivated():
 
 
 def eod_summary(account, positions, day_pnl):
-    equity = float(account.get("equity", 0))
-    cash   = float(account.get("cash", 0))
+    equity = float(account.get("equity", 0) or 0)
+    cash   = float(account.get("cash", 0) or 0)
+    invested = equity - cash
+    last_eq = equity - day_pnl
+    day_pct = (day_pnl / last_eq * 100) if last_eq else 0.0
+    positions = positions if isinstance(positions, list) else []
+    n = len(positions)
     color  = GREEN if day_pnl >= 0 else RED
     icon   = "📈" if day_pnl >= 0 else "📉"
+
+    def _plpc(p):
+        try:
+            return float(p.get("unrealized_plpc", 0) or 0) * 100
+        except (TypeError, ValueError):
+            return 0.0
+
+    greens = [p for p in positions if _plpc(p) >= 0]
+    reds   = [p for p in positions if _plpc(p) < 0]
+
+    fields = [
+        {"name": "Portfolio", "value": f"${equity:,.2f}", "inline": True},
+        {"name": "Cash",      "value": (f"${cash:,.2f} ({cash/equity*100:.0f}%)" if equity else f"${cash:,.2f}"),
+         "inline": True},
+        {"name": "Invested",  "value": f"${invested:,.2f}", "inline": True},
+    ]
+    if positions:
+        fields.append({"name": f"Open Positions ({n})",
+                       "value": f"🟢 {len(greens)} up · 🔴 {len(reds)} down", "inline": False})
+        best  = max(positions, key=_plpc)
+        worst = min(positions, key=_plpc)
+        fields.append({"name": "Best / Worst (open)",
+                       "value": (f"🟢 {best.get('symbol', '?')} {_plpc(best):+.1f}%"
+                                 f"   ·   🔴 {worst.get('symbol', '?')} {_plpc(worst):+.1f}%"),
+                       "inline": False})
+    else:
+        fields.append({"name": "Open Positions",
+                       "value": "None — sitting in cash (a valid, disciplined decision).", "inline": False})
+
     send(
         msg_type="status",
-        title=f"{icon} End of Day Summary",
-        description=f"Day P&L: **${day_pnl:+,.2f}**",
+        title=f"{icon} End of Day — {'+' if day_pnl >= 0 else '−'}${abs(day_pnl):,.2f} ({day_pct:+.2f}%)",
+        description=(f"Closed the session **{'up' if day_pnl >= 0 else 'down'} ${abs(day_pnl):,.2f}** "
+                     f"({day_pct:+.2f}%). Full report in #ft-reports."),
         color=color,
-        fields=[
-            {"name": "Portfolio Value", "value": f"${equity:,.2f}",         "inline": True},
-            {"name": "Cash",            "value": f"${cash:,.2f}",            "inline": True},
-            {"name": "Open Positions",  "value": str(len(positions) if isinstance(positions, list) else 0), "inline": True},
-        ],
+        fields=fields,
     )
 
 
 def alert(message, color=ORANGE):
     send(title="⚠️ Agent Alert", description=message, color=color, msg_type="alert")
+
+
+def _status_updates_enabled() -> bool:
+    """Config gate: discord.command_post_status_updates (default True). Lets the operator
+    silence the per-cycle status feed without a code change."""
+    try:
+        cfg = json.loads((_ROOT / "watchlist.json").read_text(encoding="utf-8"))
+        return bool((cfg.get("discord") or {}).get("command_post_status_updates", True))
+    except Exception:
+        return True
+
+
+def status_update(routine, account=None, positions=None, note=""):
+    """
+    Post the `!status` snapshot — portfolio equity, day P&L, cash, open positions, and
+    market/kill state — to #ft-command-center after a routine/cycle/trade so the channel is a
+    live pulse of the book. Pass account/positions if the caller already has them to skip an
+    Alpaca round-trip; otherwise they're fetched (cached ~20s). Gated by
+    discord.command_post_status_updates.
+    """
+    if not _status_updates_enabled():
+        return
+    account = account if isinstance(account, dict) and account else _fetch_account()
+    positions = positions if isinstance(positions, list) else _fetch_positions()
+
+    equity  = float((account or {}).get("equity", 0) or 0)
+    cash    = float((account or {}).get("cash", 0) or 0)
+    last_eq = float((account or {}).get("last_equity", equity) or equity)
+    day_pnl = equity - last_eq
+    day_pct = (day_pnl / last_eq * 100) if last_eq else 0.0
+    n_pos   = len(positions) if isinstance(positions, list) else 0
+
+    killed = (_ROOT / "kill.flag").exists()
+    try:
+        from common import is_crypto as _is_crypto, market_phase, normalize_symbol as _norm
+        phase = market_phase()
+    except Exception:
+        phase = ""
+        _norm = None
+        _is_crypto = lambda symbol, asset_class=None: "/" in str(symbol)
+    # market_phase() is time-based and HOLIDAY-BLIND (it called Juneteenth "REGULAR"). Use
+    # the broker clock to correct the label during would-be regular hours. eq_open is None
+    # when the clock can't be reached (fail-open to the time-based label).
+    eq_open = None
+    try:
+        import trade as _trade
+        eq_open = _trade.equities_open_now()
+    except Exception:
+        eq_open = None
+    if killed:
+        state = "🛑 KILL SWITCH ACTIVE — trading halted"
+    elif phase == "REGULAR":
+        state = "🟢 Market Open" if eq_open is not False else "🔴 Market Closed (holiday) · crypto 24/7"
+    elif phase in ("PRE_MARKET", "AFTER_HOURS"):
+        state = f"🟡 {phase.replace('_', ' ').title()} · crypto 24/7"
+    else:
+        state = "🔴 Market Closed · crypto 24/7"
+
+    scope_note = ""
+    if routine == "crypto":
+        crypto_count = sum(
+            1 for p in positions
+            if _is_crypto(p.get("symbol", ""), p.get("asset_class"))
+        )
+        scope_note = f"Crypto holdings: {crypto_count} · full account snapshot shown"
+
+    invested = equity - cash
+    cash_pct = (cash / equity * 100) if equity else 0.0
+    color = RED if killed else (GREEN if day_pnl >= 0 else ORANGE)
+    fields = [
+        {"name": "💰 Portfolio",      "value": f"${equity:,.2f}",                       "inline": True},
+        {"name": "📊 Day P&L",        "value": f"${day_pnl:+,.2f} ({day_pct:+.2f}%)",   "inline": True},
+        {"name": "💵 Cash",           "value": f"${cash:,.2f} ({cash_pct:.0f}%)",       "inline": True},
+    ]
+
+    # 🛒 Holdings — list the ACTUAL positions, not just a count, so each per-cycle card
+    # reflects what was bought/sold (the count alone made buys/sells invisible).
+    if positions:
+        held_lines = []
+        for p in positions[:8]:
+            sym  = _norm(p.get("symbol", ""), p.get("asset_class")) if _norm else p.get("symbol", "?")
+            qty  = float(p.get("qty", 0) or 0)
+            curr = float(p.get("current_price", 0) or 0)
+            ppc  = float(p.get("unrealized_plpc", 0) or 0) * 100
+            icon = "🟢" if ppc >= 0 else "🔴"
+            held_lines.append(f"{icon} {sym} {qty:g} @ ${curr:,.2f} ({ppc:+.1f}%)")
+        held_value = "\n".join(held_lines)
+        if n_pos > 8:
+            held_value += f"\n… +{n_pos - 8} more"
+    else:
+        held_value = "none — sitting in cash"
+    fields.append({"name": f"🛒 Holdings ({n_pos}) · invested ${invested:,.0f}",
+                   "value": held_value[:1024], "inline": False})
+
+    send(
+        msg_type="status_update",
+        title=f"📟 Portfolio Status · after {routine}",
+        description=(state + (f"\n{scope_note}" if scope_note else "")
+                     + (f"\n{note}" if note else "")),
+        color=color,
+        fields=fields,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +640,7 @@ def research_brief(title, body):
 
 
 def market_summary(regime_label, summary, fields=None):
-    """Concise market/regime summary → #ft-command-post (scannable in 5 seconds)."""
+    """Concise market/regime summary → #ft-command-center (scannable in 5 seconds)."""
     send(
         title=f"🧭 Market Summary — {regime_label}"[:240],
         description=(summary or "")[:2000],

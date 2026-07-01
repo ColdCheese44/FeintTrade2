@@ -11,8 +11,17 @@
 #    11:30  Diagnostic (midday)           every day
 #    14:15  End of Day + detailed report  Mon-Fri   (REPORT 2/3)
 #    18:15  After-hours wrap + report     Mon-Fri   (REPORT 3/3)
-#    hourly Crypto cycle                  every day (24/7)
+#    every 30m Crypto cycle               every day (24/7)
+#    every 2h  Market Research synthesis  every day (24/7, bi-hourly)
+#    06:30  Weekly Review                 Monday    intel + strategy lab + benchmark
+#    02:00  Nightly State Backup          every day data/ + journal/ -> backups/
+#    19:00  Claude Maintenance (headless) every day analyze logs + debug + verify Discord + autofix
+#    17:00  Claude Weekly Review (opus)   Sunday    deep strategy analysis + tuning + recommendations
 #    boot   Discord bot (auto-restart)    starts at STARTUP, headless
+#
+#  AT LOGON: in ADDITION to the schedules above, EVERY task also fires when you log in
+#  (a startup self-test of the whole stack). Multiple processes may run at once on login;
+#  MultipleInstances='IgnoreNew' prevents a logon run from colliding with a scheduled one.
 #
 #  The flow is research -> synthesis(journal) -> decisions, by design.
 #
@@ -57,8 +66,16 @@ function Register-MhTask {
         [string]$Bat,
         [Microsoft.Management.Infrastructure.CimInstance[]]$Triggers,
         [string]$Desc,
-        [int]$LimitMinutes = 12
+        [int]$LimitMinutes = 12,
+        [switch]$NoLogonTrigger   # set for tasks that already include an AtLogon trigger
     )
+    # ALSO start every task at user logon (in addition to its schedule) — a startup
+    # self-test of the whole stack. MultipleInstances='IgnoreNew' keeps a logon-launched run
+    # from colliding with a scheduled one. The Discord bot already has its own AtLogon, so it
+    # opts out (-NoLogonTrigger) to avoid a duplicate trigger.
+    if (-not $NoLogonTrigger) {
+        $Triggers = @($Triggers) + (New-ScheduledTaskTrigger -AtLogOn -User $User)
+    }
     $action = New-ScheduledTaskAction -Execute "$Root\$Bat" -WorkingDirectory $Root
     # Resilient + reboot-proof: catch up missed runs, no duplicate instances, restart on
     # failure, and ignore battery state so a crash / power blip / reboot self-heals headless.
@@ -112,7 +129,11 @@ $cycle = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $weekdays -At 7:30AM
 $cycle.Repetition = (New-ScheduledTaskTrigger -Once -At 7:30AM `
     -RepetitionInterval (New-TimeSpan -Minutes 15) `
     -RepetitionDuration (New-TimeSpan -Hours 6 -Minutes 30)).Repetition
-Register-MhTask "Trading - Intraday Cycle" "run_intraday.bat" $cycle "Fresh-data cycle every 15 min during the session"
+# NOTE: run_intraday.bat deliberately invokes the FULL `cycle` routine (run_cycle: fresh
+# data + code-enforced swing exits + a model decision), NOT the lighter run_intraday().
+# Intentional, but it is the heaviest API-cost line — change the routine in the .bat, not
+# the schedule, to economize.
+Register-MhTask "Trading - Intraday Cycle" "run_intraday.bat" $cycle "Fresh-data FULL cycle (run_cycle) every 15 min during the session"
 
 # 14:15 Mon-Fri — end of day + detailed report
 Register-MhTask "Trading - EOD" "run_eod.bat" `
@@ -122,26 +143,58 @@ Register-MhTask "Trading - EOD" "run_eod.bat" `
 Register-MhTask "Trading - After Hours" "run_afterhours.bat" `
     (New-ScheduledTaskTrigger -Weekly -DaysOfWeek $weekdays -At 6:15PM) "After-hours wrap + detailed Discord report"
 
-# hourly, 24/7 — crypto cycle
+# every 30 minutes, 24/7 — crypto cycle. Set to 30-MIN permanently on 2026-06-15; keep the
+# interval here in sync so re-running this registrar never reverts it. (Task name stays
+# "Trading - Crypto Hourly" to overwrite the existing task in place — renaming would orphan
+# the live one.)
 $crypto = New-ScheduledTaskTrigger -Daily -At 12:00AM
 $crypto.Repetition = (New-ScheduledTaskTrigger -Once -At 12:00AM `
-    -RepetitionInterval (New-TimeSpan -Hours 1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 30) `
     -RepetitionDuration (New-TimeSpan -Hours 24)).Repetition
-Register-MhTask "Trading - Crypto Hourly" "run_crypto.bat" $crypto "24/7 hourly crypto scored cycle"
+Register-MhTask "Trading - Crypto Hourly" "run_crypto.bat" $crypto "24/7 crypto scored cycle (every 30 min)"
 
-# hourly, 24/7 — free-source market research synthesis (continuous strategy refinement)
+# every 2 hours, 24/7 — free-source market research synthesis (continuous strategy
+# refinement). Bi-hourly (was hourly) to match the crypto cadence and halve the Sonnet
+# spend — macro/strategy bias does not move fast enough to need an hourly refresh.
 $research = New-ScheduledTaskTrigger -Daily -At 12:10AM
 $research.Repetition = (New-ScheduledTaskTrigger -Once -At 12:10AM `
-    -RepetitionInterval (New-TimeSpan -Hours 1) `
+    -RepetitionInterval (New-TimeSpan -Hours 2) `
     -RepetitionDuration (New-TimeSpan -Hours 24)).Repetition
-Register-MhTask "Trading - Market Research" "run_market_research.bat" $research "24/7 hourly free-source market research synthesis"
+Register-MhTask "Trading - Market Research" "run_market_research.bat" $research "24/7 bi-hourly free-source market research synthesis (every 2h)"
+
+# 06:30 Monday — weekly review (intel audit + strategy lab + benchmark vs baselines).
+# The SOP mandates a Monday weekly review; these read-only analytics are otherwise
+# on-demand only (!intel/!lab/!benchmark). Posts to Discord; never trades.
+Register-MhTask "Trading - Weekly Review" "run_weekly_review.bat" `
+    (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 6:30AM) "Weekly review: intel audit + strategy lab + benchmark vs baselines"
+
+# 17:00 Sunday — DEEP weekly strategy review via headless Claude (opus). Goes broader than
+# the daily maintenance: full performance + decision-intelligence + setup/regime fit + risk
+# posture, applies clear test-backed changes, writes bigger recommendations for human review,
+# and posts a structured review to #ft-reports. Lands before Monday's open. (Requires the
+# Claude Code CLI; never places orders.) Generous time limit for an opus deep-think.
+Register-MhTask "Trading - Claude Weekly Review" "run_claude_weekly.bat" `
+    (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 5:00PM) "Weekly DEEP Claude strategy review (opus): analyze + tune + recommend" 45
+
+# 02:00 daily — nightly state backup. Zips data/ + journal/ (the local-only, gitignored
+# trade log + learning history) to backups/ and keeps the most recent 14. Zero API cost.
+Register-MhTask "Trading - State Backup" "run_backup.bat" `
+    (New-ScheduledTaskTrigger -Daily -At 2:00AM) "Nightly backup of data/ + journal/ to backups/ (keep 14)"
+
+# 19:00 daily — autonomous Claude maintenance (headless): analyzes the trade logs, debugs,
+# verifies Discord comms, and autofixes clear/test-verified issues, then commits+pushes the
+# branch and posts a summary to #ft-reports. Runs after the after-hours wrap so the full
+# day's data is in. Requires the Claude Code CLI installed + authenticated (see the .bat).
+# Generous time limit (LLM run); never places orders (paper system; prompt forbids it).
+Register-MhTask "Trading - Claude Maintenance" "run_claude_maintenance.bat" `
+    (New-ScheduledTaskTrigger -Daily -At 7:00PM) "Daily headless Claude: analyze logs, debug, verify Discord, autofix" 30
 
 # at STARTUP + logon — Discord bot (its .bat auto-restarts; no execution time limit).
 # AtStartup brings it up headless on boot before anyone signs in; AtLogon is a
 # belt-and-suspenders second trigger (IgnoreNew prevents a duplicate instance).
 Register-MhTask "Trading - Discord Bot" "run_bot.bat" `
     @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -AtLogOn -User $User)) `
-    "Discord bot (auto-restart loop, headless at startup)" 0
+    "Discord bot (auto-restart loop, headless at startup)" 0 -NoLogonTrigger
 
 Write-Host ""
 Write-Host "All tasks registered. View them with:  schtasks /query /tn ""Trading - *"""

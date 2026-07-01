@@ -108,6 +108,7 @@ from common import (
     loss_streak_lockout_enforced, research_mode_active,
     force_autobuy_enabled, swing_mode_active, swing_stop_pct, trading_style,
     is_option, option_dte, load_options_config, options_enabled,
+    conviction_factor,
 )
 
 try:
@@ -133,6 +134,13 @@ try:
 except Exception as e:
     log.warning(f"Report module unavailable: {e}")
     session_report = None
+
+try:
+    from strategy_playbook import strategy_prompt_brief, validate_setup_for_entry
+except Exception as e:
+    log.warning(f"Strategy playbook unavailable: {e}")
+    def strategy_prompt_brief(): return ""
+    def validate_setup_for_entry(*a, **k): return (True, "ok")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -234,6 +242,31 @@ def _regime_blocks_leveraged_long(sym: str, regime_name: str) -> bool:
             and normalize_symbol(sym) in _leveraged_long_symbols())
 
 
+_INVERSE_ETF_TYPES = {"inverse_etf"}
+
+
+def _inverse_etf_symbols() -> set:
+    """Watchlist symbols flagged as leveraged INVERSE/hedge ETFs (SOXS/SQQQ/UVXY)."""
+    try:
+        return {normalize_symbol(s["symbol"])
+                for s in load_watchlist().get("watchlist", [])
+                if s.get("type") in _INVERSE_ETF_TYPES}
+    except Exception:
+        return set()
+
+
+def _regime_blocks_inverse_etf(sym: str, regime_name: str) -> bool:
+    """Data-driven hard rule (added 2026-06-15 from the trade log). NEVER buy a leveraged
+    inverse/hedge ETF (SOXS/SQQQ/UVXY) in a BULL regime. Buying a -3x inverse as a
+    'momentum long' to fade a one-day dip in an up-trending tape — then swing-holding it
+    for days — lost -$1,670 at a 0% win rate (SOXS -$1,608 held ~4 days, SQQQ -$63), the
+    single largest loss cluster in the book. That is fighting the tape on a decaying
+    instrument. Inverse ETFs are downside tools: permitted only when the headline regime
+    is NOT BULL (NEUTRAL/BEAR/PANIC). Mirror of _regime_blocks_leveraged_long."""
+    return (str(regime_name or "").upper() == "BULL"
+            and normalize_symbol(sym) in _inverse_etf_symbols())
+
+
 # ── API config helpers ────────────────────────────────────────────────────────
 
 def _api_cfg() -> dict:
@@ -264,6 +297,39 @@ _PRICES = {
     "claude-sonnet-4-6":            {"input":  3.0,  "output": 15.0},
     "claude-haiku-4-5-20251001":    {"input":  0.80, "output":  4.0},
 }
+
+def validate_model_config(models: dict | None = None) -> dict:
+    """
+    OFFLINE smoke-test of the configured Claude model IDs (watchlist.json
+    api_config.models) against the local pricing table (_PRICES) — the single source
+    of price data. Does NOT call the Anthropic API or place any order, so it is safe
+    to run anytime: `python scripts/orchestrator.py validate-models`.
+
+    A configured model with no _PRICES entry would silently bill at the Opus fallback
+    rate (see _log_usage), so it is flagged. Returns:
+      {"ok": bool, "models": {routine: {"model", "priced"}}, "unpriced": [...],
+       "priced_models": [...]}.
+    To verify the IDs against your actual Anthropic account/SDK, do a manual
+    non-trading probe, e.g.:
+        python -c "import anthropic; c=anthropic.Anthropic(); \
+                   print(c.messages.create(model='claude-opus-4-8', max_tokens=1, \
+                   messages=[{'role':'user','content':'ping'}]).model)"
+    """
+    if models is None:
+        try:
+            from common import load_watchlist
+            models = (load_watchlist().get("api_config") or {}).get("models") or {}
+        except Exception:
+            models = {}
+    out, unpriced = {}, []
+    for routine, model in (models or {}).items():
+        priced = model in _PRICES
+        out[routine] = {"model": model, "priced": priced}
+        if not priced and model not in unpriced:
+            unpriced.append(model)
+    return {"ok": not unpriced, "models": out, "unpriced": unpriced,
+            "priced_models": sorted(_PRICES.keys())}
+
 
 def _log_usage(routine: str, model: str, input_tokens: int, output_tokens: int):
     """Append one usage record. Non-blocking — never raises."""
@@ -328,6 +394,10 @@ def ask_model(prompt: str, system_text: str, routine: str = "cycle") -> str:
                     "connection error",
                     "timeout",
                     "timed out",
+                    "internal server error",
+                    "api_error",
+                    "500",
+                    "502",
                     "503",
                     "529",
                 )
@@ -608,6 +678,12 @@ def get_positions_norm():
     pos = safe_run("research.py", "positions")
     return normalize_positions(pos) if isinstance(pos, list) else []
 
+# Routines that post a !status snapshot to #ft-command-center when they finish (every
+# cycle/trade/research/etc.). Utility routines (report/usage/validate-models) are excluded.
+_STATUS_ROUTINES = {"research", "trading", "intraday", "cycle",
+                    "eod", "afterhours", "marketopen", "crypto"}
+
+
 def _notify(fn_name, *args, **kwargs):
     if dn:
         try:
@@ -706,10 +782,59 @@ def _notify_decision_executed(routine: str, payload: dict,
         log.warning(f"Decision-executed notification failed for {routine}: {e}")
 
 
+def _float_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_crypto_trend_gate(order_data: dict, research_ind: dict | None,
+                             collect_events: list | None = None) -> list[str]:
+    """
+    Block crypto BUYs when the daily trend is bearish (EMA9 < EMA21), and surface
+    that block the same way the later execution gates do. The proposal has already
+    been posted at this point, so a quiet drop makes Discord look like it missed a
+    trade even though no broker order was submitted.
+    """
+    kept, blocked = [], []
+    research_ind = research_ind or {}
+    for order in order_data.get("orders", []):
+        side = str(order.get("side", "buy")).lower()
+        sym = normalize_symbol(order.get("symbol", ""))
+        if side == "buy":
+            ind = research_ind.get(order.get("symbol")) or research_ind.get(sym) or {}
+            ema9 = _float_or_none(ind.get("ema9"))
+            ema21 = _float_or_none(ind.get("ema21"))
+            if ema9 is not None and ema21 is not None and ema9 < ema21:
+                msg = (
+                    f"BUY BLOCKED - {sym}: crypto daily trend gate failed "
+                    f"(EMA9 {ema9:g} < EMA21 {ema21:g}). Proposal posted, "
+                    "but no broker order was submitted."
+                )
+                blocked.append(sym)
+                log.info(msg)
+                print(f"  REJECTED (crypto-trend): {sym} - {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": order.get("qty", 0)}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym,
+                        "side": side,
+                        "status": "rejected",
+                        "message": msg,
+                    })
+                continue
+        kept.append(order)
+    if blocked:
+        log.info(f"Crypto trend gate: blocked downtrend buy(s) {blocked} (daily EMA9<EMA21)")
+        order_data["orders"] = kept
+    return blocked
+
+
 def _notify_research_outputs(analysis: str, ctx: dict, regime: dict | None = None):
     """
     Fan the morning research out to the dedicated operator channels (once per run,
-    not per cycle): research brief → #ft-research, regime headline → #ft-command-post,
+    not per cycle): research brief → #ft-research, regime headline → #ft-command-center,
     marketwide-discovery scan → #ft-signals.
     """
     if not dn:
@@ -804,7 +929,7 @@ def _research_autobuy(payload: dict, account: dict, positions: list,
     # Prefer new symbols, then highest score.
     qualifying.sort(key=lambda t: (t[1], -t[0]))
     sc, is_held, sym, ref, c = qualifying[0]
-    conv = 1.0 if sc >= 9 else 0.85 if sc >= 7 else 0.55 if sc >= 5 else 0.30  # aggressive profile
+    conv = conviction_factor(sc, default=0.30)  # aggressive profile (shared single source)
     alloc_pct = float(symbol_limits.get(sym, load_risk().get("default_unlisted_max_alloc_pct", 10)))
     qty = round((equity * (alloc_pct / 100.0) * conv) / ref, 8)
     if qty <= 0:
@@ -869,12 +994,22 @@ def _load_context() -> dict:
     except Exception:
         ctx["live_brief"] = ""
 
+    # Single marketwide scan per context load, reused for BOTH the prompt brief and the
+    # dynamic-watchlist tracker — so the watchlist keeps updating (promote/demote) on EVERY
+    # routine, continuously and automatically, at no extra API cost. Appearances are counted
+    # per distinct day inside the tracker, so running this every cycle can't over-promote.
     try:
-        ctx["discovery_brief"] = get_discovery_brief()
+        from screener import discover as _discover
+        _disc = _discover()
+    except Exception:
+        _disc = None
+    try:
+        ctx["discovery_brief"] = get_discovery_brief(_disc)
     except Exception:
         ctx["discovery_brief"] = ""
     try:
         import watchlist_manager
+        watchlist_manager.tick(_disc)                    # continuous auto-update of the watchlist
         _wb = watchlist_manager.brief()
         if _wb:
             ctx["discovery_brief"] = (ctx.get("discovery_brief", "") + "\n\n" + _wb).strip()
@@ -923,10 +1058,10 @@ def _load_context() -> dict:
             min_score = caps.get("min_buy_score", 6)
             ts = trading_style()
             stop = ts.get("swing_stop_pct", -3.0)
-            min_rr = ts.get("min_reward_risk", 2.5)
-            partial = ts.get("partial_profit_pct", 6.0)
+            min_rr = ts.get("min_reward_risk", 2.0)
+            partial = ts.get("partial_profit_pct", 10.0)
             trail_arm = ts.get("trail_arm_pct", 5.0)
-            trail_give = ts.get("trail_giveback_pct", 3.0)
+            trail_give = ts.get("trail_giveback_pct", 4.0)
             ctx["strategy_brief"] = (
                 "=== ACTIVE STRATEGY: SWING / POSITION TRADING (overrides the old day-trade SOP) ===\n"
                 "GOAL: flip expectancy strongly positive, then let winners compound toward $100->$1,000. "
@@ -950,15 +1085,15 @@ def _load_context() -> dict:
                 "compounding comes from.\n"
                 f"5. CONCENTRATE — at most {caps.get('max_open_positions', 5)} positions; put real size on the "
                 "1-3 best ideas rather than scattering tiny lots. Quality names, bigger conviction.\n"
-                "6. TRADE BOTH DIRECTIONS — do NOT just sit in cash when the long universe is red. When the "
-                "broad tape is CONFIRMED bearish (most names below VWAP, bearish squeeze RELEASES, negative "
-                "MACD, falling OBV — exactly today's setup), that IS a tradeable SHORT: BUY an INVERSE ETF "
-                "(SOXS for semis/tech, SQQQ for the Nasdaq; UVXY only intraday) — it RISES as the market falls, "
-                "so it scores as a normal momentum LONG. **This OVERRIDES the old SOP rule that inverse ETFs are "
-                "BEAR/PANIC-regime-only** — the headline regime label gates the LONG universe, but an inverse ETF "
-                "is bought purely on ITS OWN confirmed bullish momentum (above its VWAP, rising, MACD up) in ANY "
-                "regime, including BULL. If SOXS or SQQQ is the highest-scoring momentum-confirmed setup right now, "
-                "TAKE IT — that is the trade. Same -3% stop, same R:R, same trailing rules.\n"
+                "6. INVERSE ETFs = DOWNSIDE TRADES, NOT BULL-MARKET DIP-FADES. When the broad tape is CONFIRMED "
+                "bearish AND the headline regime is NOT BULL (NEUTRAL/BEAR/PANIC), an inverse ETF (SOXS for "
+                "semis/tech, SQQQ for the Nasdaq; UVXY intraday only) is a valid momentum trade — it rises as the "
+                "market falls. But the TRADE LOG is explicit: buying SOXS/SQQQ as a 'momentum long' to fade a "
+                "one-day dip in a BULL tape, then swing-holding it, lost -$1,670 at a 0% win rate (SOXS -$1,608 "
+                "held ~4 days) — fighting the tape on a -3x DECAYING instrument. So: do NOT buy inverse ETFs in a "
+                "BULL regime (code now BLOCKS it), and NEVER swing-hold a leveraged inverse ETF for days — they "
+                "lose to volatility decay; if you take one, it is a short-duration trade. In a bull tape with no "
+                "confirmed long setup, the correct move is CASH, not a counter-trend inverse.\n"
                 "7. CRYPTO = TREND-FOLLOWING ONLY. Buy crypto only when the DAILY trend is up (EMA9>EMA21, "
                 "price above) AND momentum confirms (squeeze released bullish / MACD bullish). Never buy a "
                 "coiling/bearish squeeze on the 'extreme fear is contrarian' thesis — that lost -$2,190 at "
@@ -967,6 +1102,9 @@ def _load_context() -> dict:
                 "leave dry powder for better setups later), respect the crypto-exposure cap, only order "
                 "Alpaca-tradeable symbols."
             )
+            expanded = strategy_prompt_brief()
+            if expanded:
+                ctx["strategy_brief"] += "\n\n" + expanded
             ctx["performance_brief"] = (ctx.get("performance_brief") or "") + "\n\n" + ctx["strategy_brief"]
             # Replace the (now mostly empty) defensive recs with the strategy stance.
             ctx["recommendations"] = (
@@ -1073,6 +1211,36 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                 })
             continue
 
+        # ── Data-driven hard rule: block setups the track record says to STOP ──────
+        # learning.get_strategy_recommendations() escalates a dominant loss-source setup
+        # to "🛑 STOP SETUP", but that only reaches the model via the prompt — which it
+        # has repeatedly ignored (momentum_breakout: 10% WR over 10 trades, -$3,334, the
+        # ENTIRE realized drawdown). Promote the STOP to a code guardrail: any setup_type
+        # listed in trading_style.disabled_setups cannot open a new position. Proven
+        # setups (bb_squeeze_breakout, ema_vwap_cross) are unaffected. Sells are never
+        # blocked (de-risking). Re-enable by removing it from the config list.
+        if side == "buy":
+            try:
+                _disabled = {
+                    str(s).strip().lower()
+                    for s in (trading_style().get("disabled_setups", []) or [])
+                }
+            except (TypeError, ValueError, AttributeError):
+                _disabled = set()
+            if setup_type.lower() in _disabled:
+                msg = (f"BUY BLOCKED — setup '{setup_type}' is disabled (net-losing track "
+                       f"record; see learning STOP-SETUP recommendation). Use a proven setup "
+                       f"(bb_squeeze_breakout / ema_vwap_cross). Re-enable in "
+                       f"trading_style.disabled_setups once its win rate recovers.")
+                log.warning(msg)
+                print(f"  REJECTED (disabled-setup): {sym} — {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                    })
+                continue
+
         # ── SOP hard rule: no leveraged LONG ETFs in BEAR/PANIC (was prompt-only) ──
         if side == "buy" and _regime_blocks_leveraged_long(sym, regime.get("regime", "")):
             msg = (f"BUY BLOCKED — {sym} is a leveraged LONG ETF; not permitted in "
@@ -1087,12 +1255,97 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                 })
             continue
 
+        # ── Data-driven hard rule (2026-06-15): no leveraged INVERSE ETFs in BULL ──
+        # Fading an up-trending tape with a decaying -3x inverse (SOXS/SQQQ), then
+        # swing-holding it, lost -$1,670 at a 0% win rate. Inverse ETFs are downside
+        # tools — only buy them when the regime is NOT BULL (NEUTRAL/BEAR/PANIC).
+        if side == "buy" and _regime_blocks_inverse_etf(sym, regime.get("regime", "")):
+            msg = (f"BUY BLOCKED — {sym} is a leveraged INVERSE ETF; not bought in a "
+                   f"{regime.get('regime')} regime. Fading an up-trending tape with a "
+                   f"decaying -3x inverse and holding it lost -$1,670 at 0% WR. Trade "
+                   f"inverse ETFs only when the regime is not BULL (NEUTRAL/BEAR/PANIC).")
+            log.warning(msg)
+            print(f"  REJECTED (regime): {sym} — {msg}")
+            _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+            if collect_events is not None:
+                collect_events.append({
+                    "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                })
+            continue
+
+        # ── Low-conviction hard gate (SOP: 3-4 = WATCH, 1-2 = HARD SKIP) ──────────
+        # conviction_factor() only SHRINKS an under-scored buy (0.30× for <5); it must
+        # never let a sub-threshold BUY execute as a small position. If the model attaches
+        # an explicit score/conviction BELOW the minimum-to-enter, reject it outright.
+        # (Scoreless buys are left to the setup_type gate + conviction clamp — the model is
+        # instructed to always score, and we don't want to block legit reconstructed/forced
+        # entries that carry no score.)
         if side == "buy":
+            _score = order.get("score", order.get("conviction"))
+            try:
+                _sv = int(round(float(_score))) if _score not in (None, "") else None
+            except (TypeError, ValueError):
+                _sv = None
+            _min_score = int(caps.get("min_buy_score", 6) or 6)
+            if _sv is not None and _sv < _min_score:
+                msg = (f"BUY BLOCKED — {sym} score {_sv} is below the minimum-to-enter "
+                       f"{_min_score} (SOP: 3-4 = WATCH, 1-2 = HARD SKIP). No low-conviction entries.")
+                log.warning(msg)
+                print(f"  REJECTED (low-score): {sym} — {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                    })
+                continue
+
+        # ── Equity/option market-closed gate (holiday/weekend/after-hours) ───────
+        # The broker clock is authoritative (market_phase() is time-based and HOLIDAY-BLIND
+        # — it called Juneteenth "open"). A non-crypto BUY when equities are closed can't
+        # fill; it just rests until the next cycle cancels it as stale, churning API + order
+        # spam. Skip it here so EVERY routine is protected. Crypto trades 24/7 — never gated.
+        if side == "buy":
+            setup_ok, setup_msg = validate_setup_for_entry(setup_type, score=_sv)
+            if not setup_ok:
+                msg = f"BUY BLOCKED - {sym} setup '{setup_type}' rejected: {setup_msg}"
+                log.warning(msg)
+                print(f"  REJECTED (strategy-playbook): {sym} - {msg}")
+                _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, msg)
+                if collect_events is not None:
+                    collect_events.append({
+                        "symbol": sym, "side": side, "status": "rejected", "message": msg,
+                    })
+                continue
+
+        if side == "buy" and not _is_crypto(sym) and not trade.equities_open_now():
+            msg = (f"BUY SKIPPED — {sym}: equity/options market is closed "
+                   f"(broker clock; holiday/weekend/after-hours). Order would not fill.")
+            log.info(msg)
+            print(f"  SKIP (market closed): {sym}")
+            if collect_events is not None:
+                collect_events.append({
+                    "symbol": sym, "side": side, "status": "skipped", "message": msg,
+                })
+            continue
+
+        if side == "buy":
+            # Per-setup risk multiplier (data-driven; trading_style.setup_size_multiplier).
+            # Shrinks historically-losing setups (e.g. momentum_breakout = the entire realized
+            # drawdown) before regime/live scaling. Unlisted setups default to 1.0 (no change).
+            setup_mult = 1.0
+            try:
+                _sm = trading_style().get("setup_size_multiplier", {}) or {}
+                setup_mult = float(_sm.get(setup_type, 1.0) or 1.0)
+            except (TypeError, ValueError):
+                setup_mult = 1.0
+            scale = multiplier * live_scale * setup_mult
             # Options trade in WHOLE contracts; equities/crypto can be fractional.
             if is_option(sym):
-                qty = int(qty * multiplier * live_scale)
+                qty = int(qty * scale)
             else:
-                qty = round(qty * multiplier * live_scale, 8)
+                qty = round(qty * scale, 8)
+            if setup_mult != 1.0:
+                log.info(f"Setup-size multiplier {setup_mult:g} applied to {sym} ({setup_type}) buy")
             if qty <= 0:
                 print(f"  SKIP {sym}: scaling produced zero qty")
                 if collect_events is not None:
@@ -1143,6 +1396,7 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                 for p in positions
                 if normalize_symbol(p.get("symbol", ""), p.get("asset_class")) == sym
             )
+            # (1) HARD per-symbol allocation cap (the symbol's max_allocation_pct × regime).
             cap_value = real_equity * (regime_adj_limit / 100.0)
             headroom = cap_value - existing_long_mv
             if headroom <= 0:
@@ -1165,6 +1419,50 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                         "message": f"qty {qty} -> {clamped} to fit {regime_adj_limit:.1f}% cap",
                     })
                 qty = clamped
+
+            # (2) DETERMINISTIC CONVICTION/SCORE SIZING CAP — the model is told to size at
+            #     equity × max_alloc × conviction_factor(score); enforce that factor here so
+            #     a JSON qty that ignores its own conviction sizing can't place an oversized
+            #     position (the TQQQ score-6 order that reasoned "qty=257" but emitted 461).
+            #     The hard alloc cap above stays the outer bound; this is a tighter, soft
+            #     sizing cap that NEVER raises qty. No usable score -> 1.0 (no reduction).
+            conv = conviction_factor(order.get("score", order.get("conviction")), default=1.0)
+            if conv is not None and conv < 1.0 - 1e-9:
+                conv_qty, conv_headroom = trade.deterministic_position_qty_cap(
+                    price, real_equity, sym_limit, regime_mult=multiplier,
+                    conviction_factor=conv, existing_long_mv=existing_long_mv,
+                )
+                score_val = order.get("score", order.get("conviction"))
+                if conv_qty <= 0:
+                    log.info(
+                        f"SIZING SKIP {sym} buy — existing ${existing_long_mv:,.2f} already fills the "
+                        f"score-{score_val} conviction allocation (conv={conv:.2f} × "
+                        f"{regime_adj_limit:.1f}% cap); no headroom for an add."
+                    )
+                    if collect_events is not None:
+                        collect_events.append({
+                            "symbol": sym, "side": side, "status": "skipped",
+                            "message": (f"conviction sizing (score {score_val}, conv {conv:.2f}) "
+                                        f"leaves no headroom over existing ${existing_long_mv:,.0f}"),
+                        })
+                    continue
+                if qty > conv_qty + 1e-9:
+                    clamped = round(conv_qty, 8)
+                    req_notional = qty * price
+                    det_notional = conv_qty * price
+                    log.warning(
+                        f"SIZING CLAMP {sym} buy: requested qty {qty:g} (${req_notional:,.0f}) exceeds "
+                        f"deterministic conviction cap {clamped:g} (${det_notional:,.0f}) "
+                        f"[score={score_val}, conv={conv:.2f}, max_alloc={sym_limit:g}%, regime_mult={multiplier:g}]; "
+                        f"clamping to {clamped:g}."
+                    )
+                    if collect_events is not None:
+                        collect_events.append({
+                            "symbol": sym, "side": side, "status": "clamped",
+                            "message": (f"qty {qty:g} -> {clamped:g} to fit score-{score_val} conviction "
+                                        f"sizing (conv {conv:.2f} × {sym_limit:g}% × regime {multiplier:g})"),
+                        })
+                    qty = clamped
 
         # Get position P&L for duplicate-entry check
         pos_obj = next((p for p in positions
@@ -1203,9 +1501,26 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
             break
 
         log.info(f"Placing order: {side} {qty} {sym} @ {price} (mult={multiplier}, live_scale={live_scale})")
-        result = trade.place_order(sym, qty, side, price)
+        result = trade.place_order(
+            sym,
+            qty,
+            side,
+            price,
+            intent_key=f"{setup_type}|{order.get('score', order.get('conviction', ''))}",
+            intent_context={
+                "learning_managed": True,
+                "setup_type": setup_type or "unknown",
+                "conviction": order.get("conviction", order.get("score", 5)),
+                "signals": order.get("signals", {}),
+                "regime": regime.get("regime", "NEUTRAL"),
+                "vix": regime.get("vix"),
+                "notes": order.get("reasoning", ""),
+                "exit_reason": order.get("exit_reason") or order.get("setup_type", "sell"),
+            },
+        )
         if isinstance(result, dict) and result.get("error"):
             err = str(result["error"])
+            ambiguous = bool(result.get("ambiguous"))
             # Non-tradeable symbol (common with exotic discovery tickers) — skip
             # quietly instead of firing a scary "rejected" alert.
             not_tradeable = any(s in err.lower() for s in
@@ -1213,15 +1528,25 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                                  "not tradeable", "is not allowed", "asset not"))
             # Non-tradeable symbols are an expected discovery artifact, not an error —
             # log at WARNING so they don't inflate the diagnostic ERROR count.
-            (log.warning if not_tradeable else log.error)(f"Order failed: {err} — {order}")
-            print(f"  {'SKIP (not tradeable)' if not_tradeable else 'FAILED'}: {side.upper()} {sym} — {err}")
-            if not not_tradeable:
+            if ambiguous:
+                log.warning(f"Order outcome unresolved: {err} — {order}")
+                print(f"  UNRESOLVED: {side.upper()} {sym} — {err}")
+                _notify(
+                    "alert",
+                    f"Order outcome unresolved for {sym}; no retry will be submitted until reconciliation. {err}",
+                )
+            else:
+                (log.warning if not_tradeable else log.error)(f"Order failed: {err} — {order}")
+                print(f"  {'SKIP (not tradeable)' if not_tradeable else 'FAILED'}: {side.upper()} {sym} — {err}")
+            if not not_tradeable and not ambiguous:
                 _notify("order_rejected", {**order, "symbol": sym, "qty": qty}, f"Broker error: {err}")
             if collect_events is not None:
                 collect_events.append({
                     "symbol": sym,
                     "side": side,
-                    "status": "not_tradeable" if not_tradeable else "broker_error",
+                    "status": "unresolved" if ambiguous else (
+                        "not_tradeable" if not_tradeable else "broker_error"
+                    ),
                     "message": err,
                 })
             continue
@@ -1234,32 +1559,44 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
         event_status = "placed"
         event_message = "order accepted"
         if side == "buy":
-            record_session_entry(sym, is_green=False)
             # Confirm the fill before tracking: poll the order briefly so the learning
             # log records the REAL filled qty/avg price, not the requested values
-            # (fixes partial-fill qty drift). A buy that hasn't filled within the poll
-            # window falls back to the requested qty/price so a later fill is still
-            # tracked; if it NEVER fills, cancel_stale_orders() + forget_unfilled_entry()
-            # sweep the orphan so it can't become a phantom round-trip exit.
-            fill_qty, fill_px = float(qty), float(price)
+            # (fixes partial-fill qty drift). Accepted-but-unfilled orders stay in the
+            # execution ledger and are reconciled on the next routine. Requested qty is
+            # never treated as a fill.
+            fill_qty, fill_px = 0.0, None
+            fill_status = str(result.get("status") or "unknown")
             order_id = result.get("id") if isinstance(result, dict) else None
             if order_id:
                 try:
-                    fq, fpx, _ = trade.get_order_fill(order_id)
-                    if fq > 0:
-                        fill_qty = fq
-                        fill_px = fpx or fill_px
+                    fill_qty, fill_px, fill_status = trade.get_order_fill(order_id)
                 except Exception:
                     pass
-            log_entry(
-                symbol=sym, side=side, qty=fill_qty, price=fill_px,
-                setup_type=setup_type or "unknown",
-                conviction=order.get("conviction", 5),
-                signals=order.get("signals", {}),
-                regime=regime.get("regime", "NEUTRAL"),
-                vix=regime.get("vix"),
-                notes=order.get("reasoning", ""),
-            )
+            if fill_qty > 0:
+                fill_px = fill_px or float(price)
+                record_session_entry(sym, is_green=False)
+                log_entry(
+                    symbol=sym, side=side, qty=fill_qty, price=fill_px,
+                    setup_type=setup_type or "unknown",
+                    conviction=order.get("conviction", 5),
+                    signals=order.get("signals", {}),
+                    regime=regime.get("regime", "NEUTRAL"),
+                    vix=regime.get("vix"),
+                    notes=order.get("reasoning", ""),
+                )
+                client_id = result.get("client_order_id")
+                if client_id:
+                    trade.ledger.mark_learning_applied(client_id, fill_qty, fill_px)
+                event_status = "filled" if fill_qty >= float(qty) - 1e-9 else "partially_filled"
+                event_message = f"filled {fill_qty:g} @ ${fill_px}"
+                placed["filled_qty"] = fill_qty
+                placed["filled_avg_price"] = fill_px
+                placed["fill_status"] = fill_status
+            else:
+                event_status = "placed_unfilled"
+                event_message = f"order accepted but not filled yet ({fill_status})"
+                placed["fill_status"] = fill_status
+                log.warning(f"Buy order accepted but unfilled: {sym} {qty} @ {price} ({fill_status})")
         else:
             filled_qty, fill_px, fill_status = _confirm_order_fill(result, qty, price)
             if filled_qty > 0:
@@ -1276,6 +1613,9 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
                         notes=order.get("reasoning", ""),
                         qty=filled_qty,
                     )
+                    client_id = result.get("client_order_id") if isinstance(result, dict) else None
+                    if client_id:
+                        trade.ledger.mark_learning_applied(client_id, filled_qty, fill_px)
                 except Exception:
                     pass
             else:
@@ -1292,6 +1632,58 @@ def _execute_orders(order_data: list, account: dict, positions: list, symbol_lim
             })
 
     return orders_placed
+
+
+def _apply_reconciled_fills() -> list:
+    """Apply delayed or incremental broker fills to learning exactly once."""
+    if not LEARNING_ENABLED:
+        return []
+    applied = []
+    for fill in trade.ledger.get_unapplied_fills():
+        context = fill.get("context") or {}
+        if not context.get("learning_managed"):
+            continue
+        qty = float(fill.get("delta_qty") or 0)
+        price = float(fill.get("delta_price") or fill.get("filled_avg_price") or 0)
+        if qty <= 0 or price <= 0:
+            continue
+        symbol = normalize_symbol(fill.get("symbol", ""))
+        side = str(fill.get("side") or "").lower()
+        try:
+            if side == "buy":
+                log_entry(
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    price=price,
+                    setup_type=context.get("setup_type") or "reconciled_entry",
+                    conviction=context.get("conviction", 5),
+                    signals=context.get("signals") or {},
+                    regime=context.get("regime") or "NEUTRAL",
+                    vix=context.get("vix"),
+                    notes=context.get("notes") or "Delayed fill applied during reconciliation",
+                )
+                record_session_entry(symbol, is_green=False)
+            elif side == "sell":
+                log_exit(
+                    symbol,
+                    price,
+                    exit_reason=context.get("exit_reason") or "reconciled_exit",
+                    notes=context.get("notes") or "Delayed fill applied during reconciliation",
+                    qty=qty,
+                )
+            else:
+                continue
+            trade.ledger.mark_learning_applied(
+                fill["client_order_id"],
+                float(fill.get("filled_qty") or qty),
+                float(fill.get("filled_avg_price") or price),
+            )
+            applied.append({"symbol": symbol, "side": side, "qty": qty, "price": price})
+            log.info(f"Applied reconciled fill to learning: {side} {qty:g} {symbol} @ {price:g}")
+        except Exception as exc:
+            log.exception(f"Could not apply reconciled fill {fill.get('client_order_id')}: {exc}")
+    return applied
 
 
 def _cancel_stale_orders(positions=None) -> list:
@@ -1313,7 +1705,9 @@ def _cancel_stale_orders(positions=None) -> list:
     held = {normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
             for p in (positions or [])}
     for c in cancelled:
-        if isinstance(c, dict) and c.get("side") == "buy":
+        if (isinstance(c, dict) and c.get("side") == "buy"
+                and float(c.get("filled_qty") or 0) <= 0
+                and str(c.get("status") or "canceled").lower() in ("canceled", "cancelled")):
             try:
                 forget_unfilled_entry(c.get("symbol"), held)
             except Exception:
@@ -1323,12 +1717,45 @@ def _cancel_stale_orders(positions=None) -> list:
 
 # ── Data gathering ─────────────────────────────────────────────────────────────
 
+def _data_universe(crypto_only: bool = False) -> list:
+    """Static watchlist entries PLUS auto-promoted dynamic symbols, so a name the
+    marketwide scanner promoted gets ANALYZED with full indicators — not merely listed in
+    the discovery brief. Bounded by discovery.max_analyzed_dynamic to keep the fetch cheap.
+    Sizing/risk for these non-watchlist names is already handled by validate_order's
+    default discovery cap, so they only need a type + the default alloc here."""
+    wl = load_watchlist()
+    entries = list(wl.get("watchlist", []))
+    have = {normalize_symbol(s.get("symbol", "")) for s in entries}
+    try:
+        import watchlist_manager
+        disc = wl.get("discovery", {}) or {}
+        default_alloc = disc.get("default_max_alloc_pct", 12)
+        max_dyn = int(disc.get("max_analyzed_dynamic", 6) or 0)
+        for sym in (watchlist_manager.active_symbols() or [])[:max_dyn]:
+            if not sym or normalize_symbol(sym) in have:
+                continue
+            have.add(normalize_symbol(sym))
+            entries.append({
+                "symbol": sym,
+                "type": "crypto" if is_crypto(sym) else "equity",
+                "max_allocation_pct": default_alloc,
+                "regimes": ["BULL", "NEUTRAL"],
+                "strategies": [],
+                "source": "auto_discovery",
+            })
+    except Exception as e:
+        log.warning(f"Dynamic-watchlist merge skipped: {e}")
+    if crypto_only:
+        return [s for s in entries if is_crypto(s.get("symbol", ""))]
+    return entries
+
+
 def gather_market_data() -> dict:
-    """Pull all data for every watchlist symbol + macro context."""
+    """Pull all data for every watchlist symbol (+ auto-promoted discoveries) + macro."""
     watchlist = load_watchlist()
     research  = {}
 
-    for s in watchlist["watchlist"]:
+    for s in _data_universe():
         symbol = s["symbol"]
         log.info(f"Fetching: {symbol}")
         bars     = safe_run("research.py", "bars", symbol)
@@ -1395,13 +1822,12 @@ def gather_market_data() -> dict:
 
 
 def gather_crypto_data() -> dict:
-    """Pull full indicator suite for crypto symbols."""
-    watchlist = load_watchlist()
+    """Pull full indicator suite for crypto symbols (+ auto-promoted crypto discoveries)."""
     account   = run("research.py", "account")
     positions = get_positions_norm()
     research  = {}
 
-    for s in watchlist["watchlist"]:
+    for s in _data_universe(crypto_only=True):
         symbol = s["symbol"]
         if not is_crypto(symbol):
             continue
@@ -1587,31 +2013,16 @@ def run_trading():
     watchlist = load_watchlist()
     symbol_limits = {s["symbol"]: s["max_allocation_pct"] for s in watchlist["watchlist"]}
 
-    # Check for stop-losses on open positions FIRST
-    stop_orders = []
-    for p in (positions if isinstance(positions, list) else []):
-        pnl_pct = float(p.get("unrealized_plpc", 0)) * 100
-        stop_threshold = regime.get("stop_loss_pct", -5.0)
-        if pnl_pct <= stop_threshold:
-            curr_price = float(p.get("current_price", 0))
-            stop_price = round(curr_price * 0.998, 5 if is_crypto(p["symbol"]) else 2)
-            stop_orders.append({
-                "symbol": p["symbol"],
-                "qty": abs(float(p.get("qty", 0))),
-                "side": "sell",
-                "limit_price": stop_price,
-                "reasoning": f"MANDATORY STOP-LOSS: down {pnl_pct:.1f}% (threshold: {stop_threshold:.0f}%)",
-                "setup_type": "stop_loss",
-                "conviction": 10,
-            })
-            log.warning(f"Stop-loss triggered: {p['symbol']} {pnl_pct:.1f}%")
-            _notify("stop_loss_alert", p["symbol"], pnl_pct, p)
-
-    if stop_orders:
-        print(f"  Executing {len(stop_orders)} mandatory stop-loss orders...")
-        # Pass full regime dict; multiplier will be 1.0 for sells (side-aware in _execute_orders)
-        _execute_orders(stop_orders, account, positions, symbol_limits, regime, {})
-        # Refresh positions after stop-loss execution
+    # Enforce swing exits BEFORE the model decides — via the SAME single-source logic every
+    # other routine uses (_manage_swing_exits: hard stop at swing_stop_pct ≈ -3%, trailing
+    # stop, partial profit). The old bespoke loop here cut only at the looser REGIME stop
+    # (-5% in BULL), so a -4% loser would be cut by the 15-min cycle but ridden by the
+    # morning session — exactly the drift this removes.
+    exit_actions, _ = _manage_swing_exits(positions, note_prefix="Trading ")
+    if exit_actions:
+        for a in exit_actions:
+            print(f"  {a}")
+        log.info(f"Swing exits (trading session): {exit_actions}")
         positions = get_positions_norm()
         account   = run("research.py", "account")
 
@@ -1646,7 +2057,7 @@ Watchlist + limits:
 
 Regime: {regime.get('regime')}. SIZE AT FULL max_allocation_pct × conviction_factor.
 The system AUTOMATICALLY scales every order by the {regime.get('multiplier', 0.6)*100:.0f}% regime multiplier — do NOT pre-multiply or you will under-size.
-Stop-loss threshold: {regime.get('stop_loss_pct', -5.0):.0f}% (already enforced above for existing positions).
+Stop-loss: swing hard stop {swing_stop_pct():.0f}% (tighter than the regime {regime.get('stop_loss_pct', -5.0):.0f}%) — already code-enforced above on existing positions via the swing-exit manager (hard stop + trailing stop + partial).
 "No trade" is a valid, fully-acceptable outcome. Only act on genuine 3+ signal setups.
 
 For each symbol in today's research:
@@ -1656,7 +2067,7 @@ For each symbol in today's research:
 4. Position size (qty) = equity × max_alloc_pct × conviction_factor / entry_price. (system applies regime multiplier)
 5. Limit order only — within 0.2% of ask.
 6. SWING trading — HOLD winners multi-day/overnight while the trend and thesis hold; do NOT flatten at 1:45 PM. Exit a position only on its stop, a trailing-stop give-back, or a thesis break.
-7. Minimum risk/reward: 2.5:1. Define entry, stop, and target before entering.
+7. Minimum risk/reward: {trading_style().get('min_reward_risk', 2.0):g}:1. Define entry, stop, and target before entering.
 8. Every researched symbol MUST appear once in "candidates" with action BUY, HOLD, WATCH, or SKIP.
 
 For crypto (24/7): use time_in_force=gtc, fractional qty, scored system applies.
@@ -1802,9 +2213,9 @@ def _swing_exit_decision(sym: str, pnl_pct: float, peaks: dict) -> tuple:
     """
     ts = trading_style()
     stop = float(ts.get("swing_stop_pct", -3.0))
-    partial_at = float(ts.get("partial_profit_pct", 6.0))
+    partial_at = float(ts.get("partial_profit_pct", 10.0))
     trail_arm = float(ts.get("trail_arm_pct", 5.0))
-    trail_give = float(ts.get("trail_giveback_pct", 3.0))
+    trail_give = float(ts.get("trail_giveback_pct", 4.0))
 
     rec = peaks.get(sym) or {"peak": pnl_pct, "partialed": False}
     rec["peak"] = max(float(rec.get("peak", pnl_pct)), pnl_pct)
@@ -1843,6 +2254,47 @@ def _option_exit_decision(sym: str, pnl_pct: float) -> tuple:
     return (None, "")
 
 
+def _minutes_to_equity_close():
+    """Minutes until the equity session closes per the Alpaca clock, or None if the
+    market is closed or the clock can't be read. Used to gate the pre-close leveraged
+    flatten — None (unreachable) fails SAFE: no forced flatten, the normal stop still
+    applies."""
+    try:
+        clock = trade.get_market_status()
+        if not clock.get("is_open"):
+            return None
+        nc = clock.get("next_close")
+        if not nc:
+            return None
+        from datetime import datetime, timezone
+        close_dt = datetime.fromisoformat(str(nc).replace("Z", "+00:00"))
+        return (close_dt - datetime.now(timezone.utc)).total_seconds() / 60.0
+    except Exception:
+        return None
+
+
+def _leveraged_overnight_flatten_due(sym: str, pnl_pct: float, mins_to_close) -> bool:
+    """True when a RED leveraged-LONG ETF should be flattened before the close instead of
+    carried overnight. A 3x leveraged long has decay + amplified gap risk overnight (the
+    SOP already force-liquidates UVXY overnight for the same reason); carrying one while
+    underwater is the dominant avg-loss driver (losers gap past the -3% stop overnight).
+    Only fires: leveraged longs (TQQQ/SOXL/FNGU/LABU/FAS), red beyond the configured
+    buffer, in the final pre-close window. Winners/flat and non-leveraged names: never.
+    Config-gated (trading_style.flatten_red_leveraged_before_close, default on)."""
+    ts = trading_style()
+    if not ts.get("flatten_red_leveraged_before_close", True):
+        return False
+    if mins_to_close is None:
+        return False
+    window = float(ts.get("leveraged_close_window_min", 15))
+    if not (0 <= mins_to_close <= window):
+        return False
+    loss_limit = float(ts.get("leveraged_overnight_loss_pct", -0.5))
+    if pnl_pct > loss_limit:
+        return False
+    return normalize_symbol(sym) in _leveraged_long_symbols()
+
+
 def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
     """
     CODE-ENFORCED swing exits on every open position (equity AND crypto): hard stop,
@@ -1853,7 +2305,9 @@ def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
     paths can't drift (they once held the same unlogged-partial bug in two copies).
     `note_prefix` tags the learning-log exit notes with the calling routine (e.g.
     "Intraday ") for provenance; it does not change any exit logic.
-    Returns (action_strings, closed_normalized_symbols).
+    Additionally flattens a RED leveraged-long ETF in the final pre-close window so a 3x
+    decaying instrument is not carried overnight to gap past its stop (see
+    _leveraged_overnight_flatten_due). Returns (action_strings, closed_normalized_symbols).
     """
     actions, closed = [], set()
     if not positions:
@@ -1861,7 +2315,13 @@ def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
     peaks = _load_peaks()
     live_symbols = set()
     managed_classes = set()                      # asset classes this call actually manages
-    equity_open = market_phase() == "REGULAR"   # equity orders only fill in regular hours
+    # Equity orders only fill when the BROKER says the market is open. Use the Alpaca clock
+    # (holiday-aware), not the time-based market_phase() which labels a holiday as REGULAR
+    # and would fire equity exits that can't fill (then get swept as stale).
+    equity_open = trade.equities_open_now()
+    # Computed once per cycle (not per-position) — minutes until the equity close, for the
+    # pre-close leveraged-long flatten. None when closed/unreachable (fails safe).
+    mins_to_close = _minutes_to_equity_close() if equity_open else None
     for p in positions:
         sym = p.get("symbol")
         if not sym:
@@ -1915,6 +2375,13 @@ def _manage_swing_exits(positions: list, note_prefix: str = "") -> tuple:
             continue
 
         action, frac, reason = _swing_exit_decision(sym, pnl_pct, peaks)
+        # Pre-close override: a RED leveraged-long ETF that the normal rules would otherwise
+        # CARRY (action is None) gets flattened so it isn't held overnight to gap past its
+        # stop. Only escalates a non-exit into a full stop; never downgrades an existing
+        # stop/trail/partial. Logged as stop_loss with a clear reason.
+        if not action and not crypto and _leveraged_overnight_flatten_due(sym, pnl_pct, mins_to_close):
+            action, frac, reason = ("stop", 1.0,
+                f"pre-close flatten: red leveraged long {pnl_pct:+.1f}% not carried overnight (gap/decay guard)")
         if not action:
             continue
         sell_qty = qty if frac >= 1.0 else (round(qty * frac, 8) if crypto else max(1, int(qty * frac)))
@@ -2126,8 +2593,8 @@ The system AUTOMATICALLY applies the {regime.get('regime')} regime multiplier of
 - Score 1-2: SKIP
 
 Step 4 — Winners (SWING — let them run, do NOT cap them):
-- up ~+6%: SELL about HALF to lock partial profit, let the rest run
-- then TRAIL the remainder — only exit if it gives back >3% from its peak, or the daily trend breaks (EMA9<EMA21). Do NOT auto-sell a winner just because it is up 15%; a strong trend can run much further — that is where the compounding comes from.
+- up ~+{trading_style().get('partial_profit_pct', 10):.0f}%: SELL about HALF to lock partial profit, let the rest run
+- then TRAIL the remainder — only exit if it gives back >{trading_style().get('trail_giveback_pct', 4):.0f}% from its peak (after arming at +{trading_style().get('trail_arm_pct', 5):.0f}%), or the daily trend breaks (EMA9<EMA21). Do NOT auto-sell a winner just because it is up a lot; a strong trend can run much further — that is where the compounding comes from.
 
 Step 5 — Calculate orders:
 - qty = (equity × alloc_factor) / latest_price, rounded to 5 decimals
@@ -2202,19 +2669,7 @@ Then provide concise bullets summarizing the strongest score, weakest score, and
             # trying to catch falling knives on the "extreme fear" thesis (e.g. BTC at
             # RSI 15, EMA9 far below EMA21) — exactly the -$2,190 / 0%-WR losing pattern.
             research_ind = data.get("research") or {}
-            kept, blocked = [], []
-            for o in order_data.get("orders", []):
-                if str(o.get("side", "buy")).lower() == "buy":
-                    nsym = normalize_symbol(o.get("symbol", ""))
-                    ind = research_ind.get(o.get("symbol")) or research_ind.get(nsym) or {}
-                    e9, e21 = ind.get("ema9"), ind.get("ema21")
-                    if e9 is not None and e21 is not None and float(e9) < float(e21):
-                        blocked.append(o.get("symbol"))
-                        continue
-                kept.append(o)
-            if blocked:
-                log.info(f"Crypto trend gate: blocked downtrend buy(s) {blocked} (daily EMA9<EMA21)")
-                order_data["orders"] = kept
+            _apply_crypto_trend_gate(order_data, research_ind, execution_events)
 
             price_lookup = {
                 normalize_symbol(sym): (
@@ -2309,6 +2764,16 @@ def run_cycle():
         append_journal_text(f"\n### Swing exits — {now_mt()}\n" + "".join(f"- {a}\n" for a in exit_actions))
         positions = [p for p in positions
                      if normalize_symbol(p.get("symbol", ""), p.get("asset_class")) not in closed_syms]
+
+    # If equities are CLOSED today (broker clock — holiday/weekend), the costly equity
+    # decision below would only place orders that can't fill (then get cancelled next
+    # cycle). Crypto is handled by the 30-min run_crypto, and swing exits already ran above,
+    # so stop here to save the API spend instead of churning all day on a holiday.
+    if not trade.equities_open_now():
+        log.info("run_cycle: equities closed (broker clock) — skipping the equity decision "
+                 "(crypto handled by run_crypto).")
+        print("  Equities closed — no new cycle decision (crypto runs on its own schedule).")
+        return
 
     watchlist     = load_watchlist()
     symbol_limits = {s["symbol"]: s["max_allocation_pct"] for s in watchlist["watchlist"]}
@@ -2720,7 +3185,7 @@ Append ONLY these sections (do not repeat existing content):
 
 ### P&L Summary
 - Day P&L: ${day_pnl:+,.2f} ({day_pnl_pct:+.2f}%)
-- Open positions carried overnight (crypto only — note which and why)
+- Open positions carried overnight (SWING — equities are intentionally held multi-day while the thesis/trend holds, plus crypto 24/7; note which and why. No forced equity flatten.)
 - Positions closed today (symbol, entry, exit, P&L, setup type used)
 
 ### What Worked Today
@@ -2790,7 +3255,10 @@ def run_afterhours():
     log.info("=== After-hours wrap started ===")
     positions = get_positions_norm()
 
-    # Hard rule: UVXY decays — never hold it overnight.
+    # Hard rule: UVXY decays — never hold it overnight. Liquidate, CONFIRM the fill, and
+    # log the exit explicitly. The old code logged via a PRE-sell snapshot, so the exit was
+    # either missed or (now that detect reconciles shrunk lots) only caught a cycle later.
+    uvxy_closed = False
     for p in positions:
         if normalize_symbol(p.get("symbol", "")) == "UVXY":
             qty = abs(float(p.get("qty", 0) or 0))
@@ -2799,6 +3267,18 @@ def run_afterhours():
                 res = trade.place_order("UVXY", qty, "sell", round(curr * 0.997, 2))
                 log.warning(f"After-hours UVXY liquidation: {res}")
                 _notify("alert", f"UVXY liquidated after-hours (no overnight hold rule): {qty} @ ~${curr:.2f}")
+                if isinstance(res, dict) and not res.get("error"):
+                    filled_qty, fill_px, _ = _confirm_order_fill(res, qty, curr)
+                    if filled_qty > 0:
+                        log_exit("UVXY", fill_px, "system_correction",
+                                 notes="no-overnight UVXY liquidation", qty=filled_qty,
+                                 entry_price=float(p.get("avg_entry_price", 0) or 0))
+                        uvxy_closed = True
+
+    # Refresh the snapshot after the liquidation so the trailing learning sync reconciles
+    # against the POST-sell book, not the stale pre-sell one.
+    if uvxy_closed:
+        positions = get_positions_norm()
 
     detect_and_log_exits(positions, "afterhours_close")
     try:
@@ -2887,6 +3367,21 @@ def run_marketopen():
 
     account   = run("research.py", "account")
     positions = get_positions_norm()
+
+    # Cut any overnight-identified stop at the FIRST action of the session. A position
+    # that breached its swing stop after-hours — typically a leveraged ETF that drifted
+    # or gapped while equities were closed — should be flattened the instant the market
+    # opens, not whenever the first intraday cycle happens to run. _manage_swing_exits is
+    # idempotent (execution ledger + sells clamp to held qty) and no-ops when the broker
+    # clock says equities are still closed, so this is safe to run here unconditionally.
+    try:
+        mo_exits, _ = _manage_swing_exits(positions, note_prefix="MarketOpen ")
+        if mo_exits:
+            log.info(f"Market-open swing exits executed: {mo_exits}")
+            positions = get_positions_norm()           # refresh the book after flattening
+    except Exception as e:
+        log.warning(f"Market-open swing-exit pass failed: {e}")
+
     ctx       = _load_context()
     regime    = ctx["regime"]
 
@@ -2985,12 +3480,42 @@ Be direct and actionable. Every number must appear. Flag anything requiring imme
 
 if __name__ == "__main__":
     routine = sys.argv[1] if len(sys.argv) > 1 else None
+
+    # Side-effect-free offline check — no trading machinery, no activity logging.
+    if routine == "validate-models":
+        _res = validate_model_config()
+        print(json.dumps(_res, indent=2))
+        if not _res["ok"]:
+            print(f"\n⚠️  Unpriced model IDs (would bill at Opus fallback rate): "
+                  f"{', '.join(_res['unpriced'])}")
+        sys.exit(0 if _res["ok"] else 1)
+
+    if routine in _STATUS_ROUTINES:
+        try:
+            trade.ledger.append_event("routine.started", payload={"routine": routine})
+            reconciliation = trade.reconcile_orders(include_broker_orders=True)
+            applied_fills = _apply_reconciled_fills()
+            if applied_fills:
+                log.info(f"Applied {len(applied_fills)} delayed fill(s) during reconciliation")
+            if reconciliation.get("unresolved"):
+                message = (
+                    f"Execution reconciliation found {reconciliation['unresolved']} unresolved "
+                    f"order(s); conflicting submissions remain blocked."
+                )
+                log.warning(message)
+                _notify("alert", message)
+            if reconciliation.get("errors"):
+                log.warning(f"Execution reconciliation warnings: {reconciliation['errors']}")
+        except Exception as e:
+            log.warning(f"Execution reconciliation unavailable: {e}")
+
     try:
         import activity as _activity
     except Exception:
         _activity = None
     if _activity and routine:
         _activity.log("routine_start", routine)
+    _routine_ok = True
     try:
         if routine == "research":
             run_research()
@@ -3014,14 +3539,43 @@ if __name__ == "__main__":
         elif routine == "usage":
             _print_usage_summary()
         else:
-            print("Usage: python scripts/orchestrator.py [research|trading|intraday|cycle|eod|afterhours|marketopen|crypto|report|usage]")
+            print("Usage: python scripts/orchestrator.py [research|trading|intraday|cycle|eod|afterhours|marketopen|crypto|report|usage|validate-models]")
             sys.exit(1)
         if _activity and routine:
             _activity.log("routine_done", routine)
     except Exception as e:
+        _routine_ok = False
         log.exception(f"Routine '{routine}' failed: {e}")
         _notify("dev_log", f"Routine '{routine}' failed: {e}", "error")
         if _activity and routine:
             _activity.log("routine_error", f"{routine}: {e}", error=str(e)[:200])
         print(f"FATAL ERROR in '{routine}': {e}")
+    finally:
+        if routine in _STATUS_ROUTINES:
+            try:
+                trade.ledger.append_event(
+                    "routine.completed" if _routine_ok else "routine.failed",
+                    payload={"routine": routine},
+                )
+            except Exception as e:
+                log.warning(f"Could not record routine execution event: {e}")
+        # Keep the local liveness signal current for every autonomous trading routine.
+        # The status card below is already the Discord pulse, so this write is local-only.
+        if routine in _STATUS_ROUTINES:
+            try:
+                from heartbeat import write_heartbeat
+                write_heartbeat(
+                    "ok" if _routine_ok else "error",
+                    f"{routine}-{'complete' if _routine_ok else 'failed'}",
+                    notify=False,
+                )
+            except Exception as e:
+                log.warning(f"Could not write routine heartbeat for '{routine}': {e}")
+        # Post the !status snapshot to #ft-command-center on EVERY trading routine — including
+        # failures — so the channel is a live pulse (equity / day P&L / cash / positions)
+        # even when a routine crashed. Best-effort; never masks the routine's exit code.
+        if routine in _STATUS_ROUTINES:
+            _notify("status_update", routine,
+                    note=("" if _routine_ok else "⚠️ routine ERRORED this run — see #ft-dev-log"))
+    if not _routine_ok:
         sys.exit(1)

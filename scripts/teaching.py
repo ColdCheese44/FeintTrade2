@@ -29,17 +29,83 @@ ACTION_TITLE = {
     "NO_TRADE": "Why we're sitting in CASH",
 }
 
+# NOTE: matched by substring (see _setup_key), first key wins — so the SPECIFIC keys
+# (gap/scored/inverse/short/panic) are listed BEFORE the generic momentum/breakout, or a
+# name like "short_momentum" would match "momentum" and lose its inverse-ETF lesson.
 SETUP_EXPLAIN = {
-    "squeeze": "A 'squeeze' is when price coils into very low volatility. When it RELEASES with volume it often runs — we only act on a bullish release, never the coil.",
+    "pump": "Pump-and-dump risk: this is NOT a trade setup. We skip or quarantine parabolic, low-quality hype moves instead of trying to outsmart manipulation.",
+    "long_hold": "Long-hold trend: a position trade where the thesis and major trend stay intact. We trail winners instead of selling just because the clock changed.",
+    "day_trade": "Day-trade momentum: same-session only, high liquidity, high score, and a clear catalyst. If it is not obvious, it is not a day trade.",
+    "scalp": "Scalp liquidity: tiny target, tight spread, strict stop. This is high-churn and only allowed at very high conviction.",
+    "overnight": "Overnight momentum: carrying gap risk only when the close is strong and the catalyst/trend justify it.",
+    "volatility": "Volatility breakout: the trade is the expansion after a coil or ATR shift. We do not chase thin parabolic names.",
+    "price_action": "Price action reversal: a candle reversal at support/resistance with volume confirmation. Pattern plus location, not pattern alone.",
+    "sector_rotation": "Sector rotation: move capital toward relative strength and away from laggards, using liquid ETFs/leaders to avoid whipsaw.",
+    "sentiment": "Sentiment contrarian: fear/greed can help, but only after price stabilizes. Sentiment alone is not a buy signal.",
+    "macro": "Macro setup: rates, USD, volatility, and liquidity shape risk-on/risk-off posture; execute only through supported liquid symbols.",
+    "gold": "Gold macro proxy: defensive allocation through a liquid ETF when trend and rates/USD context agree. Small and incubated.",
+    "gap": "Gap-and-go: the stock opened well above yesterday's close on a fresh catalyst and kept running. We buy strength that HOLDS the gap — a gap that fills back in is a trap.",
+    "scored": "Crypto scored system: we tally ~14 trend/momentum/sentiment signals and only buy at ≥5/10. A quant-style checklist removes emotion and 'this feels like a bottom' guessing.",
+    "inverse": "Inverse ETF: it RISES when the market falls. We buy it only on its OWN confirmed uptrend in a non-bull tape — never to 'catch' a one-day dip while the broader trend is still up (that quietly bled the book).",
+    "short": "Short-momentum (via inverse ETF): profiting from a CONFIRMED downtrend by trading the direction the tape is actually going. These are -3x decay instruments — short holds only.",
+    "panic": "Panic hedge (UVXY): a short-term fear-spike trade that decays fast. It is INTRADAY ONLY — never held overnight, or theta/decay eats the gain.",
+    "squeeze": "A 'squeeze' is when price coils into very low volatility (Bollinger Bands inside Keltner Channels). When it RELEASES with volume it often runs — we only act on a bullish release, never the coil.",
     "ema": "EMA cross + VWAP reclaim: the short-term trend turns up AND price trades above its volume-weighted average — buyers are in control.",
     "vwap": "VWAP is the day's 'fair price'. Trading above it = buyers in control; reclaiming it after a dip is a classic continuation cue.",
     "breakout": "A breakout clears a prior high on heavy volume. Volume is the lie-detector — no volume, no trust.",
     "momentum": "Momentum: price + indicators agree in one direction. We trade WITH the tape, not against it.",
-    "reversion": "Oversold bounce: price fell too far, too fast with no bad news, and is snapping back toward fair value.",
-    "fib": "Fibonacci levels mark where pullbacks often pause. We look for a reversal candle there, not a blind catch.",
-    "obv": "OBV (On-Balance Volume) tracks whether volume confirms price. Price up + OBV up = real buying.",
-    "options": "A long call/put is a leveraged, defined-risk bet on direction — max loss is the premium, and theta (time decay) works against us, so we keep DTE short and exits tight.",
+    "reversion": "Oversold bounce: price fell too far, too fast with no bad news, and is snapping back toward fair value. We still need a stop — knives cut.",
+    "fib": "Fibonacci levels mark where pullbacks often pause (0.382 / 0.5 / 0.618). We look for a reversal candle there, not a blind catch.",
+    "obv": "OBV (On-Balance Volume) tracks whether volume confirms price. Price up + OBV up = real buying; price up + OBV down = distribution (a warning).",
+    "options": "A long call/put is a leveraged, defined-risk bet on direction — max loss is the premium, and theta (time decay) works against us, so we keep DTE short and exits tight (+100% / -50%).",
 }
+
+# "What to watch next" — turns each decision into an actionable management plan so the
+# operator learns HOW a trade is run, not just why it was opened.
+MANAGE = {
+    "BUY":   "Now watch: price must hold above the stop and keep making higher lows. Plan — take partial profit near +10%, then trail the rest, giving back at most ~4% from the peak.",
+    "ADD":   "We only add because the base lot is GREEN. Watch the COMBINED size against the per-symbol cap; the stop stays where the original thesis breaks.",
+    "HOLD":  "Doing nothing IS the trade. Watch the trailing stop and the thesis — we exit only if one breaks, never out of boredom.",
+    "TRIM":  "Half is off the table, locking gains. The runner now works toward the next target on a trailed stop — let it breathe.",
+    "CLOSE": "Risk is off. Don't 'revenge trade' to win it back — wait for the next clean, confirmed setup.",
+    "SELL":  "Exit complete. Log WHY (stop / target / thesis break) so the next decision learns from this one.",
+    "SKIP":  "Keep it on the watchlist. If it confirms next cycle (volume + reclaim), it graduates from 'watch' to a real entry.",
+    "NO_TRADE": "Cash is dry powder, not a missed opportunity. The best entries come to those who wait for confluence.",
+}
+
+# Common mistake each action guards against — the anti-pattern that kills accounts.
+PITFALL = {
+    "BUY":   "Common mistake: chasing an extended move with no stop room, or sizing by FOMO instead of conviction.",
+    "ADD":   "Common mistake: averaging DOWN into a loser to 'lower the average' — that's how accounts blow up.",
+    "HOLD":  "Common mistake: selling a winner early out of fear, then watching it run without you.",
+    "TRIM":  "Common mistake: dumping the WHOLE position at the first green and capping your best trades.",
+    "CLOSE": "Common mistake: moving the stop lower to 'give it room.' Hope is not a strategy.",
+    "SELL":  "Common mistake: exiting on emotion mid-bar instead of at the planned level.",
+    "SKIP":  "Common mistake: forcing a marginal trade out of boredom. Over-trading is the #1 small-account killer.",
+    "NO_TRADE": "Common mistake: inventing a setup because you feel you 'should' be trading. No edge = no trade.",
+}
+
+# Rotating mini-glossary so every training post also teaches one core term.
+GLOSSARY = [
+    ("VWAP", "Volume-Weighted Average Price — the day's 'fair value'. Above it = buyers in control."),
+    ("ATR", "Average True Range — the typical move size. Used to set stops wide enough for the volatility."),
+    ("OBV", "On-Balance Volume — a running volume tally that confirms whether buying/selling backs a price move."),
+    ("RSI", "Relative Strength Index (0–100). >70 overbought, <30 oversold — momentum context, not a standalone trigger."),
+    ("MACD", "Moving Average Convergence Divergence — a trend/momentum oscillator; a bullish cross = momentum turning up."),
+    ("Squeeze", "Bollinger Bands inside Keltner Channels = coiled volatility. The RELEASE (with volume) is the tradeable move."),
+    ("Slippage", "The gap between your expected fill and the real one. Limit orders cap it; market orders don't."),
+    ("Drawdown", "A peak-to-trough drop in equity. Surviving drawdowns — via stops and sizing — is what keeps you in the game."),
+    ("Expectancy", "Average $ per trade over many trades = (win% × avg win) − (loss% × avg loss). Positive expectancy is the whole goal."),
+    ("Liquidity", "How easily you can get in/out without moving price. Thin liquidity is dangerous — especially on the EXIT."),
+    ("R:R", "Reward-to-Risk — $ you're playing for vs $ you'd lose at the stop. We want ≥2:1 so being right half the time still wins."),
+    ("Theta", "Time decay on options — premium you lose each day just from the clock ticking. Why we keep DTE short."),
+]
+
+
+def _glossary_term(seed=None):
+    import datetime as _dt
+    idx = (seed if seed is not None else _dt.datetime.now().hour) % len(GLOSSARY)
+    return GLOSSARY[idx]
 
 LESSON = {
     "BUY":   "Risk first — we define the STOP before entry and only take setups paying ≥2× what we risk. Conviction sizes the bet.",
@@ -65,6 +131,12 @@ GENERAL_TIPS = [
     "Judge your process, not the outcome — a good decision can still lose, and that's OK.",
     "FOMO is expensive. There is always another trade.",
     "Define your exit BEFORE you enter — entries are optional, exits are not.",
+    "Scale into winners, never into losers. Adding to red is the classic account-killer.",
+    "Your stop is a contract with yourself. Moving it to avoid a loss breaks the whole system.",
+    "Leverage cuts both ways and 3x ETFs DECAY — they're short-hold tools, not investments.",
+    "The market can stay irrational longer than you can stay solvent. Respect position size.",
+    "Boredom is not a signal. The urge to 'do something' has lost more money than bad analysis.",
+    "Liquidity matters most on the way OUT — never size into something you can't exit cleanly.",
 ]
 
 
@@ -120,12 +192,17 @@ def lesson_for(d: dict) -> dict:
     # Repetitive stances (no-trade / hold) rotate through general tips so the training
     # channel keeps teaching something new instead of the same line every cycle.
     lesson_txt = tip if action in ("NO_TRADE", "HOLD") else LESSON.get(action, LESSON["NO_TRADE"])
+    g_term, g_def = _glossary_term()
     return {
         "action": action,
         "title": title,
         "explain": explain.strip(),
         "lesson": lesson_txt,
+        "manage": MANAGE.get(action, ""),
+        "pitfall": PITFALL.get(action, ""),
         "tip": tip,
+        "glossary_term": g_term,
+        "glossary_def": g_def,
         "rr": rr,
     }
 
@@ -176,7 +253,7 @@ def make_card(lesson: dict) -> bytes:
     """Render a dark teaching card to PNG bytes. No emoji in the image (PIL fonts
     don't render them); emoji live in the Discord embed text instead."""
     from PIL import Image, ImageDraw
-    W, H = 840, 500
+    W, H = 840, 580
     img = Image.new("RGB", (W, H), BG)
     dr = ImageDraw.Draw(img)
     accent = COLORS.get(lesson["action"], MUTE)
@@ -209,6 +286,14 @@ def make_card(lesson: dict) -> bytes:
         dr.rectangle([bx, y2 + 4, bx + min(int(lesson['rr'] * 60), 380), y2 + 18], fill=(46, 204, 113))
         dr.rectangle([bx, y2 + 22, bx + 60, y2 + 36], fill=(231, 76, 60))
 
+    # "What to watch next" — the management plan (teaches HOW a trade is run)
+    ny = y2 + (44 if lesson.get("rr") else 6)
+    if lesson.get("manage"):
+        dr.text((48, ny), "WHAT TO WATCH NEXT", font=_font(14, True), fill=(96, 165, 250))
+        mf = _font(17)
+        for i, line in enumerate(_wrap(dr, lesson["manage"], mf, W - 96)[:2]):
+            dr.text((48, ny + 22 + i * 21), line, font=mf, fill=FG)
+
     # Lesson bar
     ly = H - 150
     dr.rounded_rectangle([32, ly, W - 32, ly + 112], radius=12, fill=(30, 38, 48))
@@ -237,11 +322,19 @@ def teach(decision: dict, dedup_key: str | None = None, cycle_id: str = "") -> b
              "CLOSE": "🔴", "SELL": "🔴", "SKIP": "⚪", "NO_TRADE": "⚪"}.get(lesson["action"], "📚")
     base = f"**{lesson['explain']}**\n\n" if lesson["explain"] else ""
     desc = f"{base}📖 **Lesson:** {lesson['lesson']}"
+    if lesson.get("rr"):
+        desc += f"\n\n⚖️ **Reward:Risk ≈ {lesson['rr']:.1f}:1** — risk a little to make a lot."
+    if lesson.get("manage"):
+        desc += f"\n\n🎯 **What to watch next:** {lesson['manage']}"
+    if lesson.get("pitfall"):
+        desc += f"\n\n⚠️ **{lesson['pitfall']}**"   # already begins 'Common mistake: …'
     if lesson.get("tip") and lesson["tip"] != lesson["lesson"]:
         desc += f"\n\n💡 **Tip:** {lesson['tip']}"
+    if lesson.get("glossary_term"):
+        desc += f"\n\n📘 **Term — {lesson['glossary_term']}:** {lesson['glossary_def']}"
     embed = {
         "title": f"{emoji} 📚 {lesson['title']}",
-        "description": desc[:2000],
+        "description": desc[:3500],
         "color": (COLORS.get(lesson["action"], MUTE)[0] << 16) + (COLORS.get(lesson["action"], MUTE)[1] << 8) + COLORS.get(lesson["action"], MUTE)[2],
     }
     if cycle_id:

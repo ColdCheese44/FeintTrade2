@@ -13,7 +13,7 @@ ping -n 3 127.0.0.1 >nul
 :: Auto-restart loop — bot comes back automatically on crash or disconnect
 :loop
 echo [%date% %time%] Bot starting... >> logs\bot.log
-python bot.py >> logs\bot.log 2>&1
+python -u bot.py >> logs\bot.log 2>&1
 echo [%date% %time%] Bot exited (code %errorlevel%), restarting in 15s... >> logs\bot.log
 ping -n 16 127.0.0.1 >nul
 goto loop

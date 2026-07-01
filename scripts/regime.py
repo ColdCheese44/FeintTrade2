@@ -44,18 +44,27 @@ REGIME_MULTIPLIERS = {
 
 # Strategies valid in each regime
 REGIME_STRATEGIES = {
-    "BULL":    ["gap_and_go", "momentum_breakout", "ema_vwap_cross", "vwap_bounce", "bb_squeeze_breakout"],
-    "NEUTRAL": ["vwap_bounce", "ema_vwap_cross", "mean_reversion", "bb_squeeze_breakout", "fibonacci_level"],
-    "BEAR":    ["mean_reversion", "oversold_bounce", "short_momentum", "inverse_etf_momentum"],
-    "PANIC":   ["oversold_bounce", "panic_hedge"],
+    "BULL":    ["long_hold_trend", "swing_momentum", "gap_and_go", "ema_vwap_cross",
+                "vwap_bounce", "bb_squeeze_breakout", "volatility_breakout",
+                "sector_rotation", "day_trade_momentum", "scalp_liquidity",
+                "overnight_momentum", "macro_risk_on"],
+    "NEUTRAL": ["swing_momentum", "vwap_bounce", "ema_vwap_cross", "mean_reversion",
+                "bb_squeeze_breakout", "fibonacci_level", "price_action_reversal",
+                "sector_rotation", "sentiment_contrarian", "macro_risk_on",
+                "macro_risk_off", "day_trade_momentum", "scalp_liquidity"],
+    "BEAR":    ["macro_risk_off", "mean_reversion", "oversold_bounce", "short_momentum",
+                "inverse_etf_momentum", "sentiment_contrarian", "gold_macro_proxy"],
+    "PANIC":   ["macro_risk_off", "panic_hedge"],
 }
 
 # Instrument preferences per regime
 REGIME_INSTRUMENTS = {
-    "BULL":    ["TQQQ", "SOXL", "FNGU", "LABU", "NVDA", "AMD", "TSLA", "COIN", "PLTR", "BTC/USD", "ETH/USD", "SOL/USD"],
-    "NEUTRAL": ["NVDA", "AMD", "TSLA", "PLTR", "MSTR", "BTC/USD", "ETH/USD"],
-    "BEAR":    ["SQQQ", "UVXY", "BTC/USD"],   # Shorts + hedge + BTC only if decoupled
-    "PANIC":   ["UVXY"],                        # Volatility hedge + cash
+    "BULL":    ["SPY", "QQQ", "IWM", "TQQQ", "SOXL", "FNGU", "LABU", "FAS",
+                "NVDA", "AMD", "TSLA", "COIN", "PLTR", "BTC/USD", "ETH/USD", "SOL/USD"],
+    "NEUTRAL": ["SPY", "QQQ", "IWM", "GLD", "TLT", "NVDA", "AMD", "TSLA",
+                "PLTR", "MSTR", "BTC/USD", "ETH/USD"],
+    "BEAR":    ["SQQQ", "SOXS", "TLT", "GLD", "BTC/USD"],   # Shorts + defensive proxies + BTC if decoupled
+    "PANIC":   ["UVXY"],                                      # Volatility hedge + cash preservation
 }
 
 # Stop-loss tightness by regime

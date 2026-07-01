@@ -171,6 +171,7 @@ def cmd_status():
     account   = run("research.py", "account")
     positions = run("research.py", "positions")
     clock     = run("trade.py", "status")
+    orders    = run("trade.py", "orders", "all")
 
     equity      = float(account.get("equity", 0))
     cash        = float(account.get("cash", 0))
@@ -179,7 +180,8 @@ def cmd_status():
     pnl_pct     = (day_pnl / last_equity * 100) if last_equity else 0
     market_open = clock.get("is_open", False)
     killed      = KILL_FLAG.exists()
-    pos_count   = len(positions) if isinstance(positions, list) else 0
+    pos_list    = normalize_positions(positions) if isinstance(positions, list) else []
+    pos_count   = len(pos_list)
 
     lines = [
         f"**FeintTrade Status** — {datetime.now().strftime('%H:%M MT')}",
@@ -190,6 +192,33 @@ def cmd_status():
         f"💵 Cash: ${cash:,.2f}",
         f"📋 Open Positions: {pos_count}",
     ]
+
+    # 🛒 Holdings — the purchases currently held (was only a count before).
+    if pos_list:
+        ot = _open_trades()
+        lines.append("\n**🛒 Holdings (purchases):**")
+        for p in pos_list[:10]:
+            sym     = p.get("symbol", "?")
+            qty     = float(p.get("qty", 0) or 0)
+            curr    = float(p.get("current_price", 0) or 0)
+            pnl     = float(p.get("unrealized_pl", 0) or 0)
+            pnl_pct = float(p.get("unrealized_plpc", 0) or 0) * 100
+            icon    = "🟢" if pnl >= 0 else "🔴"
+            strat   = (ot.get(sym) or {}).get("setup_type", "")
+            tag     = f" · {strat}" if strat else ""
+            lines.append(f"  {icon} **{sym}** {qty:g} @ ${curr:,.2f} — ${pnl:+,.2f} ({pnl_pct:+.1f}%){tag}")
+    else:
+        lines.append("\n🛒 Holdings: none — sitting in cash")
+
+    # 🧾 Recent orders — the approvals/buys the agent actually placed.
+    if isinstance(orders, list) and orders:
+        lines.append("\n**🧾 Recent orders:**")
+        for o in orders[:6]:
+            side  = (o.get("side") or "").upper()
+            sicon = "🟢" if side == "BUY" else "🔴"
+            stat  = (o.get("status") or "").upper()
+            lines.append(f"  {sicon} {side} {o.get('qty')} {o.get('symbol')} @ "
+                         f"${o.get('filled_avg_price') or o.get('limit_price') or '—'} — {stat}")
     return "\n".join(lines)
 
 
@@ -437,7 +466,19 @@ def cmd_journal():
         return f"📓 No journal entry for {today_str} yet."
 
     content = _read_text_lossy(journal_file)
-    journal_file.write_text(content, encoding="utf-8", newline="\n")
+    # Heal legacy/mojibake encoding in place — but ONLY when sanitizing actually
+    # changed the bytes. A plain read command shouldn't rewrite an already-clean file
+    # (that surprise write churned the mtime on every !journal). Best-effort: never let
+    # a write failure (read-only FS, lock) break the read command.
+    try:
+        _current = journal_file.read_text(encoding="utf-8")
+    except Exception:
+        _current = None
+    if _current != content:
+        try:
+            journal_file.write_text(content, encoding="utf-8", newline="\n")
+        except Exception:
+            pass
     preview = _journal_preview(content)
     truncated = len(preview) < len(content)
     suffix = "\n(truncated — full journal in FeintTrade2/journal/)" if truncated else ""
@@ -489,14 +530,14 @@ def cmd_channels():
     hc = dch.health_check()
     reach = hc.get("reachability", {})
     purpose = getattr(dch, "_PURPOSE", {})
-    head = (f"**Discord Channels** — multichannel "
+    head = (f"**FeintTrade Command Center** — multichannel "
             f"{'🟢 ON' if hc.get('multichannel_enabled') else '🔴 OFF'} · "
             f"bot {'✓' if hc.get('bot_token_present') else '✗'}")
     lines = [head]
     for name in hc.get("channels", {}):
         r = reach.get(name, "—")
         icon = "🟢" if r == "ok" else ("⚪" if r == "unconfigured" else "🔴")
-        lines.append(f"{icon} `#{name.replace('_', '-')}` — {purpose.get(name, '')}")
+        lines.append(f"{icon} `#{dch.display_channel_name(name)}` — {purpose.get(name, '')}")
     return "\n".join(lines)
 
 
@@ -512,12 +553,12 @@ def cmd_test():
     for name, r in results.items():
         icon = "✅" if r.get("ok") else "❌"
         detail = "" if r.get("ok") else f" ({r.get('detail', 'fail')})"
-        lines.append(f"{icon} #{name.replace('_', '-')}{detail}")
+        lines.append(f"{icon} #{dch.display_channel_name(name)}{detail}")
     return "\n".join(lines)
 
 
 def cmd_summary():
-    """Market / regime summary (the #ft-command-post headline, on demand)."""
+    """Market / regime summary (the #ft-command-center headline, on demand)."""
     reg = run("regime.py", "detect")
     if not isinstance(reg, dict) or not reg.get("regime"):
         return "Could not detect the market regime right now."

@@ -1,6 +1,7 @@
 """
 FeintTrade — Discord Bot
-Listens in DISCORD_MINDHUB_CHANNEL_ID for !commands and shells out to discord_commands.py.
+Listens in the FeintTrade Command Center for !commands and shells out to
+discord_commands.py.
 Run: python bot.py
 """
 
@@ -17,14 +18,27 @@ ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env", override=True)
 
 TOKEN      = os.getenv("DISCORD_BOT_TOKEN")
-# Bot listens in the primary command-post channel (ft-command-post); falls back to
-# the legacy channel id if command_post isn't configured.
-CHANNEL_ID = int(os.getenv("DISCORD_CH_COMMAND_POST") or os.getenv("DISCORD_MINDHUB_CHANNEL_ID", "0"))
+# Prefer the renamed #ft-command-center variable while retaining both legacy aliases.
+CHANNEL_ID = int(
+    os.getenv("DISCORD_CH_COMMAND_CENTER")
+    or os.getenv("DISCORD_CH_COMMAND_POST")
+    or os.getenv("DISCORD_MINDHUB_CHANNEL_ID", "0")
+)
 
 COMMANDS = {"!status", "!positions", "!strategies", "!orders", "!price", "!buy", "!sell",
             "!report", "!kill", "!resume", "!cancel", "!journal", "!heartbeat", "!help",
             "!channels", "!test", "!summary", "!digest", "!research", "!benchmark",
             "!ask", "!explain", "!usage", "!cost", "!tests", "!intel", "!lab", "!council", "!quote"}
+
+# Optional operator allowlist for privileged trading commands (!buy/!sell/!kill/
+# !resume/!cancel). When DISCORD_OPERATOR_USER_IDS / DISCORD_OPERATOR_ROLE_IDS are set
+# in .env, those commands run only for the listed users/roles (channel restriction still
+# applies). When unset, behavior is unchanged. See scripts/discord_auth.py.
+sys.path.insert(0, str(ROOT / "scripts"))
+try:
+    import discord_auth
+except Exception:
+    discord_auth = None
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -87,11 +101,11 @@ async def _run_cycle_async(channel: discord.TextChannel):
 
 @client.event
 async def on_ready():
-    print(f"FeintTrade Bot online as {client.user} — command channel {CHANNEL_ID}")
+    print(f"FeintTrade Command Center online as {client.user} — command channel {CHANNEL_ID}")
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         # The channel cache can be empty on the very first connect; fetch via REST so
-        # the online banner reliably lands in ft-command-post (not silently skipped).
+        # the online banner reliably lands in ft-command-center (not silently skipped).
         try:
             channel = await client.fetch_channel(CHANNEL_ID)
         except Exception as e:
@@ -99,7 +113,7 @@ async def on_ready():
     if channel:
         await channel.send(
             embed=discord.Embed(
-                title="🤖 FeintTrade Bot Online",
+                title="🤖 FeintTrade Command Center Online",
                 description="Ready to receive commands.\n\n"
                             "`!status` `!positions` `!strategies` `!price` `!orders` `!buy` `!sell` "
                             "`!report` `!kill` `!resume` `!cancel` `!journal` `!heartbeat`\n"
@@ -133,6 +147,20 @@ async def on_message(message: discord.Message):
         if content.startswith("!"):
             await message.reply(f"Unknown command `{command}`. Use `!help` to see all commands.")
         return
+
+    # Optional operator allowlist (in addition to the channel restriction). Privileged
+    # trading commands are refused — and logged, never executed — for non-allowlisted
+    # users when DISCORD_OPERATOR_USER_IDS / DISCORD_OPERATOR_ROLE_IDS are configured.
+    if discord_auth is not None and discord_auth.is_privileged(command):
+        role_ids = [r.id for r in getattr(message.author, "roles", []) or []]
+        if not discord_auth.is_authorized(command, message.author.id, role_ids):
+            print(f"DENIED privileged command {command} from "
+                  f"{message.author} (id={message.author.id}) — not in operator allowlist")
+            await message.reply(
+                f"⛔ `{command}` is restricted to authorized operators. "
+                f"Your account is not on the allowlist."
+            )
+            return
 
     # !heartbeat — full research + decision cycle, runs async (2-3 min)
     if command == "!heartbeat":

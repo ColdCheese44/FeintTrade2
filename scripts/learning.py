@@ -246,6 +246,7 @@ EXIT_REASONS = {
     "target_hit",         # explicit target hit (alias for take_profit)
     "cycle_exit",         # generic cycle exit
     "pre_session_check",  # pre-session exit detection
+    "reconciled_partial", # tracked lot shrank to match the broker (late/external partial fill)
 }
 
 _REASON_ALIASES = {
@@ -338,7 +339,7 @@ def log_exit(
         pnl_dollar = (entry_price - exit_price) * sell_qty * mult
         pnl_pct    = (entry_price - exit_price) / entry_price * 100 if entry_price else 0
 
-    outcome = "win" if pnl_pct > 0.3 else "loss" if pnl_pct < -0.3 else "breakeven"
+    outcome = "win" if pnl_pct > 0.05 else "loss" if pnl_pct < -0.05 else "breakeven"
     partial = sell_qty < held - 1e-9
 
     canonical_reason = _normalize_exit_reason(exit_reason)
@@ -369,6 +370,72 @@ def log_exit(
     return trade
 
 
+def reconcile_untracked_positions(current_positions: list) -> list:
+    """
+    Reverse reconciliation: backfill a tracked entry for any position HELD at the
+    broker but ABSENT from open_trades.json.
+
+    detect_and_log_exits() only handles the tracked→held direction (a tracked lot
+    that closed/shrank). The opposite — a live position that was never tracked
+    (its entry was opened via a path that skipped log_entry, or it is a residual
+    after a logged exit) — is invisible to the learning loop. Its eventual close
+    then logs as a context-free "reconstructed" exit (setup_type/regime/entry
+    lost), so the setup-level stats that drive strategy under-count the real book.
+
+    Anchor a tracked entry from broker truth (avg_entry_price + live qty) tagged
+    setup_type="reconstructed_entry" so the exit attributes cleanly with correct
+    P&L. timestamp_entry is set to now (the true entry time is unknown), so
+    hold-time for these is approximate — `reconstructed: True` flags that. Real
+    entries always log richer context at the point of purchase; this only catches
+    the few that slip through. Returns the list of backfilled symbols.
+    """
+    if not current_positions:
+        return []
+    open_trades = _load_open_trades()
+    backfilled = []
+    for p in current_positions:
+        sym = normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
+        if not sym or sym in open_trades:
+            continue
+        try:
+            qty = abs(float(p.get("qty", 0) or 0))
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty <= 0:
+            continue
+        try:
+            px = float(p.get("avg_entry_price", 0) or p.get("entry_price", 0) or 0)
+        except (TypeError, ValueError):
+            px = 0.0
+        if px <= 0:
+            px = _last_fill_price(sym) or 0.0
+        if px <= 0:
+            continue  # can't anchor an entry without a price
+        open_trades[sym] = {
+            "trade_id":        f"{sym.replace('/','')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_recon",
+            "symbol":          sym,
+            "side":            "buy",
+            "qty":             qty,
+            "entry_price":     px,
+            "setup_type":      "reconstructed_entry",
+            "conviction":      None,
+            "signals":         {},
+            "market_regime":   "UNKNOWN",
+            "vix":             None,
+            "asset_type":      _classify_asset(sym),
+            "time_of_day":     _time_of_day(),
+            "day_of_week":     datetime.now().strftime("%A"),
+            "timestamp_entry": datetime.now().isoformat(),
+            "scale_ins":       0,
+            "notes":           "backfilled from broker — held but untracked (entry log skipped/residual)",
+            "reconstructed":   True,
+        }
+        backfilled.append(sym)
+    if backfilled:
+        _save_open_trades(open_trades)
+    return backfilled
+
+
 def detect_and_log_exits(current_positions: list, exit_reason: str = "eod_close",
                          price_lookup: dict = None) -> list:
     """
@@ -391,25 +458,56 @@ def detect_and_log_exits(current_positions: list, exit_reason: str = "eod_close"
 
     current_syms = {normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
                     for p in current_positions}
+    # Live held qty per symbol — the broker is the source of truth for size.
+    current_qty = {}
+    for p in current_positions:
+        s = normalize_symbol(p.get("symbol", ""), p.get("asset_class"))
+        try:
+            current_qty[s] = current_qty.get(s, 0.0) + abs(float(p.get("qty", 0) or 0))
+        except (TypeError, ValueError):
+            pass
     price_lookup = {normalize_symbol(k): v for k, v in (price_lookup or {}).items()}
     closed = []
+
+    def _recent(entry):
+        ts = entry.get("last_add") or entry.get("timestamp_entry")
+        if not ts:
+            return False
+        try:
+            return 0 <= (datetime.now() - datetime.fromisoformat(ts)).total_seconds() < _RECONCILE_MIN_AGE_SEC
+        except Exception:
+            return False
+
     for sym in list(open_trades.keys()):
-        if sym in current_syms:
-            continue
         entry = open_trades.get(sym, {})
+        if sym in current_syms:
+            # Position still open — but reconcile a tracked lot LARGER than the live held
+            # qty. A sell that was accepted-but-unfilled inside the order-poll window (then
+            # filled later), or an external/partial fill, shrinks the broker position WITHOUT
+            # logging an exit, leaving open_trades over-counting (the FAS 53-vs-11 bug). Log
+            # the missing partial at the real mark and shrink tracked qty to the broker truth.
+            try:
+                tracked = float(entry.get("qty", 0) or 0)
+            except (TypeError, ValueError):
+                tracked = 0.0
+            live = current_qty.get(sym, 0.0)
+            gap = tracked - live
+            if live > 0 and gap > max(1e-6, tracked * 0.005) and not _recent(entry):
+                px = price_lookup.get(sym) or _last_fill_price(sym) or entry.get("entry_price")
+                if px:
+                    # NOT a full close — the symbol is still held, so it is deliberately
+                    # NOT added to `closed`; this only realigns the tracked lot + logs P&L.
+                    log_exit(sym, float(px), "reconciled_partial",
+                             notes=f"reconciled tracked {tracked:g} → live {live:g} (late/external partial)",
+                             qty=gap)
+            continue
         # GUARD: a position opened moments ago can be absent from a snapshot captured
         # before the order filled (the cycle fetches positions, THEN buys, then
         # reconciles against that stale list). Don't fabricate a 0-hold round-trip for
         # it — this is what produced the phantom "$61k BTC buy" wins (entry + exit in
         # the same second). Real sells log their own exit at the point of sale.
-        ts = entry.get("timestamp_entry")
-        if ts:
-            try:
-                age = (datetime.now() - datetime.fromisoformat(ts)).total_seconds()
-                if 0 <= age < _RECONCILE_MIN_AGE_SEC:
-                    continue
-            except Exception:
-                pass
+        if _recent(entry):
+            continue
         px = price_lookup.get(sym) or _last_fill_price(sym)
         if px:
             log_exit(sym, float(px), exit_reason, notes="auto-detected close")
@@ -423,10 +521,70 @@ def detect_and_log_exits(current_positions: list, exit_reason: str = "eod_close"
 
 # ── Performance stats ─────────────────────────────────────────────────────────
 
+def _collapse_to_positions(trades: list) -> list:
+    """Collapse partial-exit rows into one record per position (by trade_id).
+
+    The trade log appends one row per (partial) exit, so a single scaled-out
+    position becomes many rows — counting each as a separate "trade" inflates
+    win rate and trade counts (a 1-position FAS scale-out read as "7 trades,
+    100% WR"; a 3-tranche SOXS loss read as 3 losses). Performance stats and
+    recommendations must be position-level: one round-trip = one trade.
+
+    Rows are grouped by trade_id; dollar P&L sums, percent P&L is
+    notional-weighted across tranches (entry_price x qty, x100 for options),
+    the outcome is recomputed from the net (same +/-0.05% bands as log_exit),
+    and hold time is the longest tranche. Rows without a trade_id (legacy or
+    stubbed) each stand alone, so existing behavior is preserved. Chronological
+    order (by final exit timestamp) is kept for streak/recent-N logic.
+    """
+    groups, standalone = {}, []
+    order = []
+    for t in trades:
+        tid = t.get("trade_id")
+        if not tid:
+            standalone.append([t])
+            continue
+        if tid not in groups:
+            groups[tid] = []
+            order.append(tid)
+        groups[tid].append(t)
+
+    positions = []
+    for rows in [groups[tid] for tid in order] + standalone:
+        if len(rows) == 1:
+            positions.append(rows[0])
+            continue
+        rows_sorted = sorted(rows, key=lambda r: r.get("timestamp_exit") or "")
+        last = rows_sorted[-1]
+        net_dollar = sum(r.get("pnl_dollar", 0) or 0 for r in rows_sorted)
+        mult = OPTION_CONTRACT_MULTIPLIER if is_option(last.get("symbol", "")) else 1
+        notional = sum((r.get("entry_price", 0) or 0) * (r.get("qty", 0) or 0) * mult
+                       for r in rows_sorted)
+        net_pct = (round(net_dollar / notional * 100, 3) if notional
+                   else round(sum(r.get("pnl_pct", 0) or 0 for r in rows_sorted), 3))
+        outcome = "win" if net_pct > 0.05 else "loss" if net_pct < -0.05 else "breakeven"
+        positions.append({
+            **last,
+            "pnl_dollar":   round(net_dollar, 2),
+            "pnl_pct":      net_pct,
+            "outcome":      outcome,
+            "partial":      False,
+            "hold_minutes": max((r.get("hold_minutes", 0) or 0) for r in rows_sorted),
+            "tranches":     len(rows_sorted),
+        })
+
+    positions.sort(key=lambda p: p.get("timestamp_exit") or "")
+    return positions
+
+
 def compute_stats(trades: list = None) -> dict:
-    """Full performance statistics from the trade log."""
+    """Full performance statistics from the trade log (position-level)."""
     if trades is None:
         trades = _load_trade_log()
+
+    # Collapse partial-exit rows so one scaled-out position counts as one trade,
+    # not one trade per tranche (see _collapse_to_positions).
+    trades = _collapse_to_positions(trades)
 
     completed = [t for t in trades if t.get("outcome") and t.get("pnl_pct") is not None]
     if not completed:
@@ -664,22 +822,33 @@ def get_strategy_recommendations() -> str:
         if best_s[1]["trades"] >= 3:
             recs.append(f"📈 BEST SETUP: '{best_s[0]}' — {best_s[1]['win_rate']}% WR, ${best_s[1]['total_pnl']:+,.2f}. PRIORITIZE this setup.")
         if worst_s[1]["trades"] >= 3 and worst_s[1]["total_pnl"] < -100:
-            recs.append(f"📉 WORST SETUP: '{worst_s[0]}' — losing ${abs(worst_s[1]['total_pnl']):,.2f}. REDUCE size or skip.")
+            # Escalate from advisory to a hard STOP when a setup is the dominant, repeated
+            # loss source (≥5 trades, sub-40% WR, ≤ -$1k). Data-driven + self-updating — no
+            # hardcoded setup name, so it can't overfit or go stale. (momentum_breakout hit
+            # this bar: 33% WR over 9 trades, -$3.3k, incl. a -5% SOXL gap-through-stop.)
+            w = worst_s[1]
+            if w["trades"] >= 5 and w["win_rate"] < 40 and w["total_pnl"] <= -1000:
+                recs.append(f"🛑 STOP SETUP: '{worst_s[0]}' is the dominant loss source — "
+                            f"{w['win_rate']}% WR over {w['trades']} trades, ${w['total_pnl']:+,.2f}. "
+                            f"Do NOT open new trades with this setup; use a proven one "
+                            f"(e.g. '{best_s[0]}') instead.")
+            else:
+                recs.append(f"📉 WORST SETUP: '{worst_s[0]}' — losing ${abs(w['total_pnl']):,.2f}. REDUCE size or skip.")
 
     # Best/worst symbols
     sym_perf = stats.get("by_symbol", {})
     if sym_perf:
         sorted_syms = sorted(sym_perf.items(), key=lambda x: x[1]["total_pnl"], reverse=True)
-        if sorted_syms[0][1]["trades"] >= 2:
+        if sorted_syms[0][1]["trades"] >= 4 and sorted_syms[0][1]["total_pnl"] > 0:
             recs.append(f"📈 BEST SYMBOL: {sorted_syms[0][0]} — {sorted_syms[0][1]['win_rate']}% WR. Consider higher allocation within rules.")
-        if sorted_syms[-1][1]["total_pnl"] < -200 and sorted_syms[-1][1]["trades"] >= 2:
+        if sorted_syms[-1][1]["total_pnl"] < -200 and sorted_syms[-1][1]["trades"] >= 4:
             recs.append(f"📉 WORST SYMBOL: {sorted_syms[-1][0]} — losing. Avoid or reduce to min size until pattern improves.")
 
     # Best time of day
     tod_perf = stats.get("by_time_of_day", {})
     if tod_perf:
         best_tod = max(tod_perf.items(), key=lambda x: x[1]["win_rate"])
-        if best_tod[1]["trades"] >= 3:
+        if best_tod[1]["trades"] >= 3 and best_tod[1]["total_pnl"] > 0:
             recs.append(f"⏰ BEST TIME: '{best_tod[0]}' has {best_tod[1]['win_rate']}% WR — prioritize entries in this window.")
 
     if len(recs) == 1:
@@ -691,8 +860,13 @@ def get_strategy_recommendations() -> str:
 # ── Loss-streak lockout helpers ──────────────────────────────────────────────
 
 def get_loss_streak() -> dict:
-    """Return current streak info: {'count': N, 'type': 'loss'|'win'|'none'}."""
-    trades = _load_trade_log()
+    """Return current streak info: {'count': N, 'type': 'loss'|'win'|'none'}.
+
+    Position-level: a scaled-out winner/loser is one streak entry, not one per
+    partial-exit tranche (otherwise the loss-streak lockout could trip on the
+    partials of a single losing position).
+    """
+    trades = _collapse_to_positions(_load_trade_log())
     completed = [t for t in trades if t.get("outcome") in ("win", "loss")]
     streak, stype = 0, "none"
     for t in reversed(completed):
@@ -754,6 +928,9 @@ def get_completed_trade_count() -> int:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Prevent UnicodeEncodeError on Windows cp1252 consoles when output contains emoji.
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
     cmd = sys.argv[1] if len(sys.argv) > 1 else "brief"
     if cmd == "brief":
         print(get_performance_brief())

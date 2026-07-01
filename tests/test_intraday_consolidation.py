@@ -80,6 +80,18 @@ def _wire_intraday(orch, monkeypatch, tmp_path, positions):
     return orders, journal, dle_calls, swing_calls
 
 
+def test_swing_stop_binds_tighter_than_regime(monkeypatch):
+    """run_trading now shares _manage_swing_exits, so morning-session stops fire at the
+    SWING stop (~-3%) — not the looser regime stop (-5%). A -4% loser (which the old
+    run_trading regime check would have RIDDEN) is cut; a -2% position is held."""
+    orch = importlib.import_module("scripts.orchestrator")
+    monkeypatch.setattr(orch, "trading_style", _swing_thresholds)   # swing_stop_pct = -3%
+    act, frac, _ = orch._swing_exit_decision("NVDA", -4.0, {})
+    assert act == "stop" and frac == 1.0
+    act_hold, _, _ = orch._swing_exit_decision("NVDA", -2.0, {})
+    assert act_hold is None
+
+
 def test_run_intraday_routes_equity_exit_through_manage_swing_exits(L, tmp_path, monkeypatch):
     """An equity below the swing stop is exited via the ONE canonical path; a deep-
     underwater crypto position in the SAME snapshot is left untouched (crypto-cycle's job)."""
@@ -156,6 +168,42 @@ def test_run_intraday_never_manages_crypto(L, tmp_path, monkeypatch):
     assert len(dle_calls) == 1 and dle_calls[0][1] == "intraday_exit"
     # No actions → no Intraday Check journal block.
     assert "### Intraday Check" not in "".join(journal)
+
+
+def test_marketopen_sweeps_overnight_stops_before_summary(monkeypatch):
+    """run_marketopen() must cut an overnight-identified stop at the FIRST action of the
+    session — delegating to the canonical _manage_swing_exits with the live book and the
+    'MarketOpen ' learning tag — BEFORE it does any of the heavy summary work. A leveraged
+    loser that drifted below its stop after-hours should not wait for the first intraday
+    cycle to run."""
+    orch = importlib.import_module("scripts.orchestrator")
+
+    tqqq = {"symbol": "TQQQ", "qty": "116", "current_price": "82",
+            "unrealized_plpc": "-0.05", "avg_entry_price": "86"}     # -5% → past -3% stop
+    monkeypatch.setattr(orch, "run", lambda *a, **k: {"equity": 100000, "last_equity": 100000})
+    monkeypatch.setattr(orch, "get_positions_norm", lambda: [tqqq])
+
+    swing_calls = []
+    def _spy(positions, note_prefix=""):
+        swing_calls.append((positions, note_prefix))
+        return ([], set())
+    monkeypatch.setattr(orch, "_manage_swing_exits", _spy)
+
+    # Sentinel stops run_marketopen right after the swing-exit pass so we don't have to
+    # stub the entire summary/Claude/report pipeline — and it proves the sweep runs FIRST.
+    class _StopHere(Exception):
+        pass
+    def _ctx():
+        raise _StopHere()
+    monkeypatch.setattr(orch, "_load_context", _ctx)
+
+    with pytest.raises(_StopHere):
+        orch.run_marketopen()
+
+    assert len(swing_calls) == 1, "market-open must run the canonical swing-exit pass exactly once"
+    passed_positions, note_prefix = swing_calls[0]
+    assert [p["symbol"] for p in passed_positions] == ["TQQQ"]
+    assert note_prefix == "MarketOpen "
 
 
 if __name__ == "__main__":

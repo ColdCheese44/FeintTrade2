@@ -2,7 +2,7 @@
 Multi-channel Discord router (FeintTrade 10-channel operator layer, ported to Python).
 
 FeintTrade historically posted everything to a single Discord webhook. FeintTrade's
-operator UX routes each message TYPE to a dedicated channel (command-post, signals,
+operator UX routes each message TYPE to a dedicated channel (command-center, signals,
 trade-log, alerts, status, reports, research, approvals, dev-log, dev-ideas) with
 severity-based cooldowns and dedup so the server stays scannable.
 
@@ -61,6 +61,14 @@ _CHANNEL_ENV = {
     "training":     "DISCORD_CH_TRAINING",
 }
 
+# Public names may evolve without breaking the persisted routing keys or existing .env.
+_CHANNEL_ENV_ALIASES = {
+    "command_post": ("DISCORD_CH_COMMAND_CENTER", "DISCORD_CH_COMMAND_POST"),
+}
+_CHANNEL_DISPLAY = {
+    "command_post": "command-center",
+}
+
 # Human-readable purpose per channel (test messages, dashboard panel, !channels).
 _PURPOSE = {
     "command_post": "🧭 Primary hub — heartbeats, market/regime summaries, and where you type commands",
@@ -109,7 +117,17 @@ def multichannel_enabled() -> bool:
 
 def channel_id(logical: str) -> str:
     """Snowflake for a logical channel name, or '' if not configured."""
-    return os.getenv(_CHANNEL_ENV.get(logical, ""), "").strip()
+    env_names = _CHANNEL_ENV_ALIASES.get(logical, (_CHANNEL_ENV.get(logical, ""),))
+    for env_name in env_names:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def display_channel_name(logical: str) -> str:
+    """User-facing Discord channel name for a stable internal routing key."""
+    return _CHANNEL_DISPLAY.get(logical, str(logical or "").replace("_", "-"))
 
 
 def channel_for_type(msg_type: str) -> str:
@@ -311,6 +329,20 @@ def _post_webhook_file(filename: str, content: str, payload: dict) -> bool:
         return False
 
 
+def _post_webhook_image(filename: str, image_bytes: bytes, payload: dict) -> bool:
+    if not WEBHOOK_URL:
+        return False
+    try:
+        files = {"file": (filename, image_bytes, "image/png")}
+        r = requests.post(WEBHOOK_URL, data={"payload_json": json.dumps(payload)},
+                          files=files, timeout=20)
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"Discord webhook image post failed: {e}")
+        return False
+
+
 # ── Public API ──────────────────────────────────────────────────────────────────
 
 def post(msg_type: str, embed: dict | None = None, content: str | None = None,
@@ -334,22 +366,32 @@ def post(msg_type: str, embed: dict | None = None, content: str | None = None,
         return True  # deliberately suppressed — not an error
 
     delivered = False
-    logical = None
+    requested_logical = channel_for_type(msg_type)
+    delivered_logical = None
+    transport = None
     if multichannel_enabled():
         logical, cid = _resolve_channel(msg_type)
         if cid:
             delivered = _post_bot_json(cid, payload)
+            if delivered:
+                delivered_logical, transport = logical, "bot"
         if not delivered and logical != "command_post":
             cp = channel_id("command_post")
             if cp:
                 delivered = _post_bot_json(cp, payload)
+                if delivered:
+                    delivered_logical, transport = "command_post", "bot_fallback"
     if not delivered:
         delivered = _post_webhook_json(payload)
+        if delivered:
+            delivered_logical, transport = "webhook", "webhook_fallback"
 
     _record(msg_type, dedup_key, severity_for(msg_type), posted=delivered)
     if activity:
-        activity.log("discord_post", f"{msg_type} -> #{(logical or 'webhook').replace('_', '-')}",
-                     delivered=delivered,
+        target = display_channel_name(delivered_logical or requested_logical or "undelivered")
+        activity.log("discord_post", f"{msg_type} -> #{target}",
+                     delivered=delivered, transport=transport or "none",
+                     requested_channel=requested_logical,
                      title=((embed or {}).get("title") if embed else (content or "")[:80]))
     return delivered
 
@@ -358,20 +400,30 @@ def post_file(msg_type: str, filename: str, content: str, embed: dict | None = N
     """Route a file attachment (e.g. a full report) with the same fallback chain."""
     payload = {"embeds": [embed]} if embed else {}
     delivered = False
-    logical = None
+    requested_logical = channel_for_type(msg_type)
+    delivered_logical = None
+    transport = None
     if multichannel_enabled():
         logical, cid = _resolve_channel(msg_type)
         if cid:
             delivered = _post_bot_file(cid, filename, content, payload)
+            if delivered:
+                delivered_logical, transport = logical, "bot"
         if not delivered and logical != "command_post":
             cp = channel_id("command_post")
             if cp:
                 delivered = _post_bot_file(cp, filename, content, payload)
+                if delivered:
+                    delivered_logical, transport = "command_post", "bot_fallback"
     if not delivered:
         delivered = _post_webhook_file(filename, content, payload)
+        if delivered:
+            delivered_logical, transport = "webhook", "webhook_fallback"
     if activity:
-        activity.log("discord_file", f"{msg_type} file -> #{(logical or 'webhook').replace('_', '-')}",
-                     delivered=delivered, filename=filename)
+        target = display_channel_name(delivered_logical or requested_logical or "undelivered")
+        activity.log("discord_file", f"{msg_type} file -> #{target}",
+                     delivered=delivered, transport=transport or "none",
+                     requested_channel=requested_logical, filename=filename)
     return delivered
 
 
@@ -385,19 +437,31 @@ def post_image(msg_type: str, filename: str, image_bytes: bytes, embed: dict | N
         return True
     payload = {"embeds": [embed]} if embed else {}
     delivered = False
-    logical = None
+    requested_logical = channel_for_type(msg_type)
+    delivered_logical = None
+    transport = None
     if multichannel_enabled():
         logical, cid = _resolve_channel(msg_type)
         if cid:
             delivered = _post_bot_image(cid, filename, image_bytes, payload)
+            if delivered:
+                delivered_logical, transport = logical, "bot"
         if not delivered and logical != "command_post":
             cp = channel_id("command_post")
             if cp:
                 delivered = _post_bot_image(cp, filename, image_bytes, payload)
+                if delivered:
+                    delivered_logical, transport = "command_post", "bot_fallback"
+    if not delivered:
+        delivered = _post_webhook_image(filename, image_bytes, payload)
+        if delivered:
+            delivered_logical, transport = "webhook", "webhook_fallback"
     _record(msg_type, dedup_key, severity_for(msg_type), posted=delivered)
     if activity:
-        activity.log("discord_image", f"{msg_type} image -> #{(logical or 'webhook').replace('_', '-')}",
-                     delivered=delivered, filename=filename)
+        target = display_channel_name(delivered_logical or requested_logical or "undelivered")
+        activity.log("discord_image", f"{msg_type} image -> #{target}",
+                     delivered=delivered, transport=transport or "none",
+                     requested_channel=requested_logical, filename=filename)
     return delivered
 
 
@@ -425,7 +489,7 @@ def broadcast_test(note: str = "") -> dict:
             results[logical] = {"configured": False, "ok": False, "detail": "no channel id"}
             continue
         embed = {
-            "title": f"📌 #{logical.replace('_', '-')}",
+            "title": f"📌 #{display_channel_name(logical)}",
             "description": (f"{_PURPOSE.get(logical, '—')}\n\n"
                             f"✅ *Channel wired & reachable — FeintTrade is posting here.*"
                             + (f"\n\n{note}" if note else "")),

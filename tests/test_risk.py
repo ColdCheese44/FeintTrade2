@@ -19,9 +19,6 @@ Covers:
 import sys
 import os
 from pathlib import Path
-import json
-import tempfile
-import shutil
 
 # Add scripts dir to path
 ROOT = Path(__file__).parent.parent
@@ -59,8 +56,8 @@ import common
 from common import (
     normalize_symbol, is_crypto, CORRELATED_CRYPTO_BASKETS,
     is_validation_mode, get_effective_caps, VALIDATION_MODE_CAPS,
-    check_duplicate_entry, record_session_entry, get_session_entries,
-    check_daily_stop, update_daily_state, get_daily_state,
+    check_duplicate_entry, record_session_entry,
+    check_daily_stop, get_daily_state,
     _daily_state_path,
 )
 
@@ -256,6 +253,27 @@ class TestValidationModeCaps:
         assert "altcoin" in msg.lower() or "3" in msg
 
 
+class TestResearchModeOverlayTightensOnly:
+    """The paper-only research overlay may TIGHTEN caps but must never raise the
+    crypto-exposure cap above the documented 40% HARD CONSTRAINT (CLAUDE.md)."""
+
+    def test_overlay_cannot_raise_crypto_cap_above_normal(self, monkeypatch):
+        # Overlay tries to widen crypto exposure to 50% (>40% documented hard cap).
+        monkeypatch.setattr(common, "research_mode",
+                            lambda: {"enabled": True, "max_crypto_exposure_pct": 50})
+        caps = get_effective_caps(50)  # normal mode
+        assert caps["research_mode"] is True
+        assert caps["max_crypto_exposure_pct"] <= 40, (
+            "research overlay must not raise crypto cap above the 40% hard cap")
+
+    def test_overlay_can_still_tighten_crypto_cap(self, monkeypatch):
+        # A tighter overlay value (30%) is honored.
+        monkeypatch.setattr(common, "research_mode",
+                            lambda: {"enabled": True, "max_crypto_exposure_pct": 30})
+        caps = get_effective_caps(50)
+        assert caps["max_crypto_exposure_pct"] == 30
+
+
 # ── 5. Duplicate-entry cooldown ───────────────────────────────────────────────
 
 class TestDuplicateEntryCooldown:
@@ -441,6 +459,32 @@ class TestPaperModeDailyStops:
         result = check_daily_stop(93_000, opening_equity=100_000, completed_trades=50)
         assert result["stops_enforced"] is True
         assert result["hard_stop"] is True
+
+
+class TestLimitOnly:
+    def test_place_order_rejects_missing_limit(self):
+        r = trade.place_order("NVDA", 10, "buy")
+        assert "error" in r and "Limit price required" in r["error"]
+
+    def test_place_order_rejects_zero_limit(self):
+        r = trade.place_order("NVDA", 10, "buy", 0)
+        assert "error" in r and "market orders are not permitted" in r["error"].lower() or "Limit price" in r["error"]
+
+    def test_place_order_accepts_limit(self, monkeypatch, tmp_path):
+        captured = {}
+        monkeypatch.setattr(trade.ledger, "DB_PATH", tmp_path / "execution.sqlite")
+
+        class _R:
+            status_code = 200
+            def json(self):
+                return {"id": "x", "status": "accepted"}
+
+        monkeypatch.setattr(trade._HTTP, "post", lambda *a, **k: (captured.update(k) or _R()))
+        r = trade.place_order("NVDA", 10, "buy", 100.5)
+        assert r.get("status") == "accepted"
+        assert captured["json"]["type"] == "limit"            # never market
+        assert captured["json"]["limit_price"] == "100.5"
+        assert captured["json"]["client_order_id"].startswith("ft-")
 
 
 if __name__ == "__main__":

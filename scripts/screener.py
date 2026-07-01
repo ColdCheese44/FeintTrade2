@@ -2,7 +2,7 @@
 Marketwide discovery scanner — FeintTrade.
 
 Surfaces trending, liquid, TRADABLE symbols beyond the static watchlist so the
-agent can hunt the whole market, not just 19 names. Sources:
+agent can hunt the whole market, not just the static watchlist. Sources:
   • Alpaca most-active stocks         (/v1beta1/screener/stocks/most-actives)
   • Alpaca top movers (gainers/losers) (/v1beta1/screener/stocks/movers)
   • CoinGecko trending coins           (mapped to Alpaca crypto pairs)
@@ -138,6 +138,83 @@ def _coingecko_trending():
         return []
 
 
+# ── Full crypto-universe scan ─────────────────────────────────────────────────
+# Stablecoin / pegged bases never "trend" — scanning them is noise. Exclude them so the
+# crypto mover scan surfaces real momentum, not 0.0% pegs.
+_STABLE_BASES = {"USDT", "USDC", "DAI", "PYUSD", "USD", "USDG", "GUSD", "BUSD", "TUSD"}
+_crypto_universe_cache = {"syms": None}
+
+
+def _tradable_crypto_usd():
+    """Every active, tradable Alpaca crypto pair quoted in USD (the form the bot trades),
+    minus stablecoin/pegged bases. This is the FULL universe (~70 pairs), not the ~7
+    hand-mapped CoinGecko-trending names. Cached per process run."""
+    if _crypto_universe_cache["syms"] is not None:
+        return _crypto_universe_cache["syms"]
+    syms = []
+    try:
+        r = requests.get(f"{BASE_URL}/v2/assets", headers=HEADERS,
+                         params={"asset_class": "crypto", "status": "active"}, timeout=15)
+        if r.ok:
+            for a in r.json():
+                s = a.get("symbol", "")
+                if not a.get("tradable") or not s.endswith("/USD"):
+                    continue
+                if s.split("/")[0] in _STABLE_BASES:
+                    continue
+                syms.append(s)
+    except Exception:
+        syms = []
+    _crypto_universe_cache["syms"] = syms
+    return syms
+
+
+def _crypto_snapshots(symbols):
+    """Per-pair price, today's %change, today's volume, and prior FULL-day dollar volume,
+    batched. The prior-day figure is the stable liquidity measure — today's bar resets at
+    UTC midnight, so early in the UTC day it is only a partial-day volume."""
+    out = {}
+    for i in range(0, len(symbols), 25):
+        chunk = symbols[i:i + 25]
+        try:
+            r = requests.get(f"{DATA_URL}/v1beta3/crypto/us/snapshots", headers=HEADERS,
+                             params={"symbols": ",".join(chunk)}, timeout=15)
+            if not r.ok:
+                continue
+            for sym, snap in r.json().get("snapshots", {}).items():
+                db = snap.get("dailyBar") or {}
+                pdb = snap.get("prevDailyBar") or {}
+                c, v, pc, pv = db.get("c"), db.get("v"), pdb.get("c"), pdb.get("v")
+                if not c or not pc:
+                    continue
+                chg = (float(c) - float(pc)) / float(pc) * 100 if pc else 0.0
+                out[sym] = {"price": float(c), "volume": float(v or 0),
+                            "prev_dollar_volume": float(pc) * float(pv or 0),
+                            "day_change_pct": round(chg, 2)}
+        except Exception:
+            continue
+    return out
+
+
+def _crypto_movers(top=8, min_move_pct=3.0, liquidity_top=20, min_dollar_volume=0):
+    """Scan the WHOLE Alpaca crypto universe for daily movers. Liquidity is RELATIVE —
+    rank every tradable USD pair by prior-day dollar volume and keep the most-liquid
+    `liquidity_top` (robust to the paper feed's unreliable absolute magnitudes; the
+    ranking still tracks real liquidity, e.g. BTC>ETH>XRP>SOL). Among those, surface the
+    ones that traded today and moved at least `min_move_pct`. `min_dollar_volume` is an
+    optional absolute floor (default 0 = off; raise it on the real live feed).
+    Returns [(symbol, snapshot_dict), ...] sorted by absolute move."""
+    snaps = _crypto_snapshots(_tradable_crypto_usd())
+    ranked = sorted(snaps.items(), key=lambda kv: kv[1]["prev_dollar_volume"],
+                    reverse=True)[:liquidity_top]
+    movers = [(s, d) for s, d in ranked
+              if d["volume"] > 0
+              and d["prev_dollar_volume"] >= min_dollar_volume
+              and abs(d["day_change_pct"]) >= min_move_pct]
+    movers.sort(key=lambda x: abs(x[1]["day_change_pct"]), reverse=True)
+    return movers[:top]
+
+
 # ── Discovery ─────────────────────────────────────────────────────────────────
 def discover():
     """Return ranked candidate symbols NOT already on the watchlist."""
@@ -206,13 +283,45 @@ def discover():
         })
 
     # Crypto trending (already-known liquid pairs; tradability assumed for mapped set)
+    seen_crypto = set()
     for c in _coingecko_trending():
-        if normalize_symbol(c["symbol"]) in own:
+        nsym = normalize_symbol(c["symbol"])
+        if nsym in own:
             continue
+        seen_crypto.add(nsym)
         candidates.append({
             "symbol": c["symbol"], "type": "crypto", "price": None,
             "score": 2, "reason": f"CoinGecko trending ({c.get('name')})",
         })
+
+    # Full Alpaca crypto-universe movers (~70 pairs, not just the ~7 trending names) so
+    # "all security types" are actually scanned. Trend-following bias: a gainer scores
+    # higher than a faller — contrarian crypto buying lost money (see CLAUDE.md). Liquid
+    # pairs only; tradability is implicit (the list comes from active tradable assets).
+    if cfg.get("scan_crypto_universe", True):
+        cmove = cfg.get("crypto_min_move_pct", 3.0)
+        for sym, s in _crypto_movers(top=cfg.get("crypto_max_candidates", 8),
+                                     min_move_pct=cmove,
+                                     liquidity_top=cfg.get("crypto_liquidity_top", 20),
+                                     min_dollar_volume=cfg.get("crypto_min_dollar_volume", 0)):
+            nsym = normalize_symbol(sym)
+            if nsym in own or nsym in seen_crypto:
+                continue
+            seen_crypto.add(nsym)
+            chg = s["day_change_pct"]
+            score = 2
+            reasons = ["universe mover"]
+            if chg >= cmove:
+                score += 3; reasons = [f"gainer {chg:+.1f}%"]
+            elif chg <= -cmove:
+                score += 1; reasons = [f"faller {chg:+.1f}% (reversal watch)"]
+            else:
+                reasons = [f"{chg:+.1f}%"]
+            candidates.append({
+                "symbol": sym, "type": "crypto", "price": round(s["price"], 6),
+                "prev_dollar_volume": round(s["prev_dollar_volume"]), "day_change_pct": chg,
+                "score": score, "reason": ", ".join(reasons),
+            })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     return {
@@ -224,10 +333,12 @@ def discover():
     }
 
 
-def get_discovery_brief():
-    """Formatted candidate list for injection into Claude prompts."""
+def get_discovery_brief(discovery=None):
+    """Formatted candidate list for injection into Claude prompts. Accepts a pre-computed
+    discovery dict so the caller can reuse a single scan for both the brief and the
+    watchlist tracker update."""
     try:
-        d = discover()
+        d = discovery if discovery is not None else discover()
     except Exception as e:
         return f"=== MARKETWIDE DISCOVERY: unavailable ({e}) ==="
     if not d.get("enabled"):

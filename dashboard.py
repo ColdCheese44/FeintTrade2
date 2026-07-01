@@ -243,6 +243,12 @@ html, body, [data-testid="stAppViewContainer"] {
 .badge-yellow{ color: #fbbf24; font-weight: 700; }
 .badge-blue  { color: #60a5fa; font-weight: 700; }
 .mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ── Kill the big default top gap (Streamlit chrome is hidden, but its padding stays) ── */
+[data-testid="stMain"] .block-container,
+[data-testid="stAppViewContainer"] .block-container {
+  padding-top: 0.8rem !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -482,8 +488,12 @@ def get_market_movers():
                     chg = (float(lp) - float(op)) / float(op) * 100
                     moves.append({"sym": sym, "price": float(lp), "chg_pct": round(chg, 2), "volume": vol})
             moves.sort(key=lambda x: x["chg_pct"], reverse=True)
-            gainers = moves[:5]
-            losers  = list(reversed(moves[-5:]))
+            # Split so gainers and losers never overlap when there are < 10 movers
+            # (moves[:5] and moves[-5:] used to share rows, showing the same symbol as
+            # both a top gainer AND a top loser). Only positive moves can be gainers and
+            # only negative moves losers.
+            gainers = [m for m in moves if m["chg_pct"] > 0][:5]
+            losers  = list(reversed([m for m in moves if m["chg_pct"] < 0]))[:5]
     except Exception:
         pass
     return gainers, losers
@@ -587,6 +597,21 @@ def render_tickers():
 
 def render_alerts_ticker():
     alerts = []
+    # Market-status alert FIRST (holiday/weekend/closed), via the broker clock.
+    try:
+        if not get_market_status().get("is_open"):
+            _n = now_mt()
+            if _n.weekday() >= 5:
+                _why = "Weekend"
+            elif market_phase() == "REGULAR":
+                _why = _US_HOLIDAYS.get((_n.month, _n.day), "Holiday")
+            elif market_phase() in ("PRE_MARKET", "AFTER_HOURS"):
+                _why = market_phase().replace("_", " ").title()
+            else:
+                _why = "Closed"
+            alerts.append(("🔴 MARKET CLOSED", f"{_why} — equities halted, crypto trades 24/7", "#ff4d6d"))
+    except Exception:
+        pass
     try:
         fg = get_fear_greed()
         score = fg.get("score")
@@ -738,6 +763,19 @@ def render_sector_heatmap(sectors: dict):
 
 # Plain-English, slightly cheeky one-liners so hovering a position teaches the setup.
 STRATEGY_BLURBS = {
+    "long_hold_trend": "Position trend hold. Thesis intact, major trend up, trail the winner.",
+    "swing_momentum": "Core swing setup: trend, VWAP, volume, and R:R line up.",
+    "day_trade_momentum": "Same-session momentum. High liquidity and high score required.",
+    "scalp_liquidity": "Fast liquidity scalp. Tiny target, tight invalidation, no lingering.",
+    "overnight_momentum": "Strong close/catalyst carry. Gap risk must pay for itself.",
+    "volatility_breakout": "Volatility expansion after a coil or ATR shift. No thin parabolic chase.",
+    "price_action_reversal": "Reversal candle at a real level with volume confirmation.",
+    "sector_rotation": "Capital rotating into relative strength and out of laggards.",
+    "sentiment_contrarian": "Fear/greed setup, but only after price stabilizes.",
+    "macro_risk_on": "Rates/USD/liquidity favor risk assets. Broad risk-on posture.",
+    "macro_risk_off": "Risk-off macro. Reduce longs or use confirmed downside tools.",
+    "gold_macro_proxy": "Gold proxy. Small defensive allocation when macro and trend agree.",
+    "pump_and_dump_avoidance": "Manipulation risk. Skip/quarantine, never chase.",
     "gap_and_go": "Gapped up on news at the open and kept running. Momentum chad. 🏃",
     "momentum_breakout": "Broke above prior-day high on volume. Buying strength, not hope.",
     "ema_vwap_cross": "Fast EMA crossed up + reclaimed VWAP. The 'trend just turned' play.",
@@ -939,7 +977,7 @@ def _countdown_html():
         h, m = divmod(mins, 60)
         label = "● MARKET OPEN"
         color = "#00d4aa"
-        sub = f"{h}h {m:02d}m to close (2:00 PM) · equity flatten 1:45 PM"
+        sub = f"{h}h {m:02d}m to close (2:00 PM) · SWING: positions held overnight"
     elif phase == "PRE_MARKET":
         open_dt = n.replace(hour=7, minute=30, second=0, microsecond=0)
         mins = max(0, int((open_dt - n).total_seconds() // 60)); h, m = divmod(mins, 60)
@@ -1008,6 +1046,38 @@ def _today_cost_badge():
         return ""
 
 
+@st.cache_data(ttl=20)
+def _agent_health_badge():
+    """Liveness badge for the autonomous agent: heartbeat note + a 24/7 freshness pulse
+    (heartbeat.json plus agent-written log/decision mtimes, none of which the dashboard
+    touches), so you can see at a glance whether the scheduled routines are still firing."""
+    try:
+        from dashboard_helpers import agent_health
+        hb = {}
+        hbp = ROOT / "heartbeat.json"
+        if hbp.exists():
+            try:
+                hb = json.loads(hbp.read_text(encoding="utf-8"))
+            except Exception:
+                hb = {}
+        mtimes = []
+        for rel in ("heartbeat.json", "data/decision_log.jsonl",
+                    "logs/crypto.log", "logs/intraday.log"):
+            p = ROOT / rel
+            if p.exists():
+                mtimes.append(p.stat().st_mtime)
+        h = agent_health(hb, last_activity_ts=max(mtimes) if mtimes else None)
+        return (
+            f'<span title="Last agent activity: {h["notes"]} · status {h["status"]} · {h["age"]} ago" '
+            f'style="background:#0d1117;border:1px solid {h["color"]}55;color:{h["color"]};'
+            f'font-size:0.62rem;font-weight:700;letter-spacing:0.05em;padding:2px 8px;'
+            f'border-radius:20px;margin-left:8px;cursor:help">'
+            f'{h["dot"]} AGENT {h["label"].upper()} · {h["age"]}</span>'
+        )
+    except Exception:
+        return ""
+
+
 def render_header():
     n = now_mt()
     tz = mt_tz_label()
@@ -1016,6 +1086,7 @@ def render_header():
     date_str = n.strftime("%A, %B %d %Y")
     vm_badge = _validation_badge()
     cost_badge = _today_cost_badge()
+    health_badge = _agent_health_badge()
 
     st.markdown(f"""
 <div style="display:flex;align-items:center;justify-content:space-between;
@@ -1024,7 +1095,7 @@ def render_header():
     <span style="color:#f1f5f9;font-size:1.5rem;font-weight:800;letter-spacing:-0.01em">⚡ FEINTTRADE</span>
     <span style="color:#00d4aa;font-size:1.5rem;font-weight:300;margin-left:4px">TRADER</span>
     <span style="color:#334155;font-size:0.7rem;margin-left:12px;font-family:'JetBrains Mono',monospace">PAPER</span>
-    {vm_badge}{cost_badge}
+    {vm_badge}{cost_badge}{health_badge}
   </div>
   <div style="text-align:right">
     <div><span style="color:{color};font-weight:700;font-size:0.9rem">{label}</span></div>
@@ -1116,6 +1187,9 @@ TV_SYMBOLS = {
     "SQQQ":     "NASDAQ:SQQQ",
     "SPY":      "AMEX:SPY",
     "QQQ":      "NASDAQ:QQQ",
+    "IWM":      "AMEX:IWM",
+    "GLD":      "AMEX:GLD",
+    "TLT":      "NASDAQ:TLT",
 }
 
 def render_tv_chart(sym_key, interval, height):
@@ -1376,9 +1450,64 @@ def render_orders_table(orders):
 </div>
 """, unsafe_allow_html=True)
 
+# ─── MARKET STATUS BANNER ────────────────────────────────────────────────────
+# Minimal fixed-date US market holidays so a closed weekday can be NAMED. Floating
+# holidays (Thanksgiving, etc.) fall back to a generic "Market Holiday".
+_US_HOLIDAYS = {
+    (1, 1): "New Year's Day", (6, 19): "Juneteenth",
+    (7, 4): "Independence Day", (12, 25): "Christmas Day",
+}
+
+def render_market_status():
+    """Holiday-aware market-state banner. Uses the Alpaca clock (authoritative on holidays),
+    not just the time-based phase — so it correctly shows e.g. 'MARKET CLOSED — Juneteenth'."""
+    try:
+        clock = get_market_status()
+        is_open = bool(clock.get("is_open"))
+    except Exception:
+        clock, is_open = {}, None
+    n = now_mt()
+    tz = mt_tz_label()
+    phase = market_phase()
+
+    if is_open:
+        mins = minutes_to_close() or 0
+        h, m = divmod(mins, 60)
+        icon, color, head, sub = "🟢", "#00d4aa", "MARKET OPEN", f"{h}h {m:02d}m to close (2:00 PM {tz}) · crypto 24/7"
+    elif phase == "PRE_MARKET":
+        icon, color, head, sub = "🟡", "#fbbf24", "PRE-MARKET", f"equities open 7:30 AM {tz} · crypto 24/7"
+    elif phase == "AFTER_HOURS":
+        icon, color, head, sub = "🟡", "#fbbf24", "AFTER-HOURS", f"extended close 6:00 PM {tz} · crypto 24/7"
+    else:
+        if n.weekday() >= 5:
+            reason = "Weekend"
+        elif phase == "REGULAR":          # would-be trading hours but broker says closed → holiday
+            reason = _US_HOLIDAYS.get((n.month, n.day), "Market Holiday")
+        else:
+            reason = "Overnight"
+        nxt = ""
+        try:
+            no = clock.get("next_open")
+            if no:
+                no_dt = datetime.fromisoformat(no.replace("Z", "+00:00")).astimezone(n.tzinfo)
+                nxt = f" · reopens {no_dt.strftime('%a %b %d')} 7:30 AM {tz}"
+        except Exception:
+            pass
+        icon, color, head, sub = "🔴", "#ff4d6d", f"MARKET CLOSED — {reason}", f"equities halted · crypto trades 24/7{nxt}"
+
+    st.markdown(f"""
+<div style="display:flex;align-items:center;gap:14px;background:linear-gradient(90deg,{color}1f,transparent);
+  border:1px solid {color}55;border-left:4px solid {color};border-radius:10px;padding:10px 18px;margin-bottom:10px">
+  <span style="font-size:1.35rem">{icon}</span>
+  <span style="color:{color};font-weight:800;font-size:0.98rem;letter-spacing:0.04em">{head}</span>
+  <span style="color:#94a3b8;font-size:0.82rem;font-family:'JetBrains Mono',monospace">{sub}</span>
+</div>""", unsafe_allow_html=True)
+
+
 # ─── MAIN APP ─────────────────────────────────────────────────────────────────
 
-# Tickers at top
+# Market status banner (fills the top; holiday-aware) + tickers
+render_market_status()
 render_tickers()
 render_alerts_ticker()
 
@@ -1401,11 +1530,14 @@ with c_ai:
         st.rerun()
 
 # ── Fetch once for all tabs ──
+account = get_account()
+# Degraded state: an empty dict means the account fetch failed (transient VPN/DNS blip).
+# Without this guard the page rendered a scary, false "$0.00 portfolio / -100% total P&L".
+account_degraded = not isinstance(account, dict) or not account
 try:
-    account  = get_account()
-    equity   = float(account.get("equity", 0))
-    cash     = float(account.get("cash", 0))
-    last_eq  = float(account.get("last_equity", equity))
+    equity   = float(account.get("equity", 0) or 0)
+    cash     = float(account.get("cash", 0) or 0)
+    last_eq  = float(account.get("last_equity", equity) or equity)
     invested = equity - cash
     day_pnl  = equity - last_eq
     day_pnl_pct = (day_pnl / last_eq * 100) if last_eq else 0
@@ -1414,7 +1546,12 @@ try:
     total_pnl_pct = total_pnl / start_eq * 100
 except Exception:
     account = {}
+    account_degraded = True
     equity = cash = last_eq = invested = day_pnl = day_pnl_pct = total_pnl = total_pnl_pct = 0
+
+if account_degraded:
+    st.warning("⚠️ Account data temporarily unavailable (transient Alpaca/VPN blip). "
+               "Showing placeholders — values refresh automatically. Trading is unaffected.")
 
 try:
     positions = get_positions()
@@ -1433,12 +1570,19 @@ render_vibe_bar(account)
 
 # ── Portfolio metric strip ──
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Portfolio", f"${equity:,.2f}", f"{day_pnl:+,.2f}")
-m2.metric("Cash", f"${cash:,.2f}", f"{cash/equity*100:.1f}% avail" if equity else "—")
-m3.metric("Invested", f"${invested:,.2f}", f"{invested/equity*100:.1f}%" if equity else "—")
-m4.metric("Day P&L", f"${day_pnl:+,.2f}", f"{day_pnl_pct:+.2f}%")
-m5.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}% vs start")
-m6.metric("Open Positions", str(len(positions)), f"{len(positions)} active")
+if account_degraded:
+    # Don't render misleading $0 / -100% figures when the account fetch failed.
+    for col, lbl in ((m1, "Portfolio"), (m2, "Cash"), (m3, "Invested"),
+                     (m4, "Day P&L"), (m5, "Total P&L")):
+        col.metric(lbl, "—", "unavailable")
+    m6.metric("Open Positions", str(len(positions)), f"{len(positions)} active")
+else:
+    m1.metric("Portfolio", f"${equity:,.2f}", f"{day_pnl:+,.2f}")
+    m2.metric("Cash", f"${cash:,.2f}", f"{cash/equity*100:.1f}% avail" if equity else "—")
+    m3.metric("Invested", f"${invested:,.2f}", f"{invested/equity*100:.1f}%" if equity else "—")
+    m4.metric("Day P&L", f"${day_pnl:+,.2f}", f"{day_pnl_pct:+.2f}%")
+    m5.metric("Total P&L", f"${total_pnl:+,.2f}", f"{total_pnl_pct:+.2f}% vs start")
+    m6.metric("Open Positions", str(len(positions)), f"{len(positions)} active")
 
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
@@ -1857,6 +2001,9 @@ with tab_discord:
     if _dch is None:
         st.error("discord_channels module unavailable — check scripts/ on the path.")
     else:
+        display_channel = getattr(
+            _dch, "display_channel_name", lambda name: name.replace("_", "-")
+        )
         try:
             hc = _dch.health_check()
         except Exception as e:
@@ -1872,7 +2019,7 @@ with tab_discord:
             reach = hc.get("reachability", {})
             purpose = getattr(_dch, "_PURPOSE", {})
             rows = [{
-                "Channel": f"#{name.replace('_', '-')}",
+                "Channel": f"#{display_channel(name)}",
                 "Purpose": purpose.get(name, "—"),
                 "Configured": "✓" if configured else "✗",
                 "Reachable": reach.get(name, "—"),
@@ -1905,7 +2052,7 @@ with tab_discord:
                 (st.success if ok == len(results) else st.warning)(
                     f"Delivered to {ok}/{len(results)} channels.")
                 rr = [{
-                    "Channel": f"#{k.replace('_', '-')}",
+                    "Channel": f"#{display_channel(k)}",
                     "Delivered": "✓" if v.get("ok") else "✗",
                     "Detail": v.get("detail", "") or v.get("channel_id", ""),
                 } for k, v in results.items()]
@@ -1940,7 +2087,7 @@ with tab_discord:
         st.markdown('<div class="mh-card-title">◈ DISCORD FEED</div>', unsafe_allow_html=True)
         _chans = list(getattr(_dch, "_CHANNEL_ENV", {}).keys()) if _dch else []
         if _chans:
-            _fc = st.selectbox("Channel", _chans, format_func=lambda n: f"#{n.replace('_', '-')}",
+            _fc = st.selectbox("Channel", _chans, format_func=lambda n: f"#{display_channel(n)}",
                                key="discord_feed_channel")
             _msgs = _discord_feed(_fc, 6)
             if _msgs:

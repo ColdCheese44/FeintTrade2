@@ -71,5 +71,39 @@ def test_teach_from_payload_no_trade(monkeypatch):
     assert captured.get("action") == "NO_TRADE"
 
 
+# ── Expanded training content ─────────────────────────────────────────────────
+
+def test_lesson_includes_manage_pitfall_and_glossary():
+    lesson = teaching.lesson_for({"symbol": "NVDA", "action": "BUY", "setup_type": "squeeze",
+                                  "regime": "BULL", "entry": 100, "stop": 97, "target": 110})
+    assert lesson["manage"] and "watch" in lesson["manage"].lower()
+    assert lesson["pitfall"].lower().startswith("common mistake")
+    assert lesson["glossary_term"] and lesson["glossary_def"]
+
+
+@pytest.mark.parametrize("setup,expect", [
+    ("short_momentum", "inverse"),       # specific key must win over generic 'momentum'
+    ("inverse_etf_momentum", "rises"),
+    ("gap_and_go", "gap-and-go"),
+    ("crypto_scored", "scored"),
+    ("panic_hedge", "uvxy"),
+])
+def test_specific_setups_resolve_over_generic(setup, expect):
+    lesson = teaching.lesson_for({"symbol": "X", "action": "BUY", "setup_type": setup})
+    assert expect in lesson["explain"].lower()
+
+
+def test_glossary_rotates():
+    terms = {teaching._glossary_term(seed=h)[0] for h in range(len(teaching.GLOSSARY))}
+    assert len(terms) >= 6
+
+
+def test_close_action_has_management_and_pitfall():
+    lesson = teaching.lesson_for({"symbol": "SOXS", "action": "CLOSE"})
+    assert lesson["manage"] and lesson["pitfall"]
+    png = teaching.make_card(lesson)              # taller card still renders for non-RR actions
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

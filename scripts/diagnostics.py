@@ -40,12 +40,24 @@ sys.path.insert(0, str(ROOT / "scripts"))
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from common import now_mt_str, today_mt, normalize_positions, is_crypto, load_risk  # noqa: E402
+from common import (  # noqa: E402
+    now_mt_str, today_mt, normalize_positions, is_crypto, load_risk, make_http_session,
+)
+
+# Retry-resilient session for the trade-critical Alpaca GETs below, so a transient
+# DNS/timeout blip (e.g. a VPN tunnel reconnect) rides out the backoff instead of being
+# reported as a false "Alpaca unreachable" outage. Idempotent GETs only — diagnostics
+# never places orders. A genuine, sustained outage still surfaces after retries exhaust.
+_HTTP = make_http_session()
 
 try:
     import discord_notify as dn
 except Exception:
     dn = None
+try:
+    import discord_channels as dch
+except Exception:
+    dch = None
 try:
     import learning
 except Exception:
@@ -86,7 +98,7 @@ def _check_env(r):
 
 def _check_alpaca(r):
     try:
-        acct = requests.get(f"{BASE_URL}/v2/account", headers=HEADERS, timeout=10).json()
+        acct = _HTTP.get(f"{BASE_URL}/v2/account", headers=HEADERS, timeout=10).json()
         eq = float(acct.get("equity", 0))
         r.good(f"Alpaca account reachable — equity ${eq:,.0f}, status {acct.get('status')}")
         if acct.get("crypto_status") != "ACTIVE":
@@ -95,16 +107,17 @@ def _check_alpaca(r):
             r.error("Account is BLOCKED for trading")
         return acct
     except Exception as e:
-        r.error(f"Alpaca account unreachable: {e}")
+        r.error(f"Alpaca account unreachable after retries (sustained outage, not a "
+                f"transient blip): {e}")
         return {}
 
 
 def _check_positions_and_risk(r, acct, fix):
     try:
         positions = normalize_positions(
-            requests.get(f"{BASE_URL}/v2/positions", headers=HEADERS, timeout=10).json())
+            _HTTP.get(f"{BASE_URL}/v2/positions", headers=HEADERS, timeout=10).json())
     except Exception as e:
-        r.error(f"Positions unreachable: {e}")
+        r.error(f"Positions unreachable after retries: {e}")
         return []
     risk = load_risk()
     eq = float(acct.get("equity", 0) or 0)
@@ -128,6 +141,27 @@ def _check_positions_and_risk(r, acct, fix):
     return positions
 
 
+def _quarantine_corrupt(path: Path) -> Path:
+    """
+    Copy a corrupt state file into data/quarantine/ with a timestamp BEFORE it is
+    reset, so the original (possibly forensically useful) bytes are never lost. Returns
+    the quarantine path. Uses a byte-for-byte copy (no decode) so even undecodable
+    content is preserved verbatim. Raises if the backup cannot be written — the caller
+    must NOT reset the file unless the backup succeeded.
+    """
+    qdir = DATA_DIR / "quarantine"
+    qdir.mkdir(parents=True, exist_ok=True)
+    stamp = now_mt_str("%Y%m%d_%H%M%S").split(" ")[0]
+    dest = qdir / f"{path.name}.corrupt.{stamp}"
+    # Avoid clobbering a same-second quarantine (rapid re-runs) — suffix a counter.
+    i = 1
+    while dest.exists():
+        dest = qdir / f"{path.name}.corrupt.{stamp}.{i}"
+        i += 1
+    dest.write_bytes(path.read_bytes())
+    return dest
+
+
 def _check_data_integrity(r, fix):
     DATA_DIR.mkdir(exist_ok=True)
     for name in ("open_trades.json", "performance.json"):
@@ -139,8 +173,17 @@ def _check_data_integrity(r, fix):
             r.good(f"data/{name} valid")
         except Exception:
             if fix:
+                # Quarantine the corrupt file FIRST — only reset to empty if the
+                # evidence was safely preserved (never destroy state silently).
+                try:
+                    backup = _quarantine_corrupt(p)
+                except Exception as e:
+                    r.error(f"data/{name} is corrupt JSON — NOT reset "
+                            f"(could not quarantine evidence: {e})")
+                    continue
                 p.write_text("{}", encoding="utf-8")
-                r.fix(f"Repaired corrupt data/{name} (reset to empty)")
+                r.fix(f"Repaired corrupt data/{name} (reset to empty; "
+                      f"original quarantined to {backup.relative_to(ROOT)})")
             else:
                 r.error(f"data/{name} is corrupt JSON")
 
@@ -152,20 +195,37 @@ def _reconcile_learning(r, positions, fix):
         open_trades = learning._load_open_trades()
     except Exception:
         return
-    held = {p["symbol"] for p in positions}
+    norm = getattr(learning, "normalize_symbol", lambda s, *a: s)
+    held = {norm(p.get("symbol", ""), p.get("asset_class")) for p in positions if p.get("symbol")}
     stale = [s for s in open_trades if s not in held]
+    # Orphans: HELD at the broker but never tracked. detect_and_log_exits only
+    # handles the other direction, so without this their eventual close logs as a
+    # context-free "reconstructed" exit and the learning loop under-counts the book.
+    untracked = [s for s in held if s not in open_trades]
+    did_fix = False
     if stale and fix:
         closed = learning.detect_and_log_exits(positions, "diagnostic_reconcile")
         if closed:
             r.fix(f"Reconciled learning log — recorded exits for: {', '.join(closed)}")
+            did_fix = True
+    if untracked and fix:
+        backfilled = learning.reconcile_untracked_positions(positions)
+        if backfilled:
+            r.fix(f"Backfilled untracked live positions into learning log: {', '.join(backfilled)}")
+            did_fix = True
+    if did_fix:
         try:
             learning.update_performance()
             r.fix("Refreshed performance.json cache")
         except Exception:
             pass
-    elif stale:
-        r.warning(f"Learning log has {len(stale)} tracked symbols no longer held (run --fix)")
-    else:
+    if not fix and (stale or untracked):
+        if stale:
+            r.warning(f"Learning log has {len(stale)} tracked symbols no longer held (run --fix)")
+        if untracked:
+            r.warning(f"Learning log missing {len(untracked)} held position(s): "
+                      f"{', '.join(untracked)} (untracked at broker — run --fix)")
+    elif not stale and not untracked:
         r.good("Learning log in sync with live positions")
 
 
@@ -246,6 +306,48 @@ def _check_discord_bot_process(r):
         r.warning(f"Discord bot process check failed: {e}")
 
 
+def _check_discord_delivery(r):
+    """Verify the bot can read every configured channel without posting a test message.
+
+    A running gateway process is not sufficient: when the bot loses channel permissions,
+    outbound notifications can silently collapse onto the single webhook while commands
+    and dedicated-channel routing stop working.
+    """
+    if not os.getenv("DISCORD_BOT_TOKEN"):
+        if os.getenv("DISCORD_WEBHOOK_URL"):
+            r.warning("Discord bot token missing; webhook-only posting is available but commands are offline")
+        return
+    if dch is None:
+        r.error("Discord channel router unavailable")
+        return
+    try:
+        health = dch.health_check()
+    except Exception as e:
+        r.error(f"Discord channel health check failed: {e}")
+        return
+
+    configured = health.get("channels", {}) or {}
+    reach = health.get("reachability", {}) or {}
+    failed = [name for name, present in configured.items()
+              if present and reach.get(name) != "ok"]
+    if not failed:
+        r.good(f"Discord bot can access all {sum(bool(v) for v in configured.values())} configured channels")
+        return
+
+    command_state = reach.get("command_post", "unconfigured")
+    display_name = getattr(dch, "display_channel_name", lambda name: name.replace("_", "-"))
+    details = ", ".join(
+        f"#{display_name(name)} ({reach.get(name, 'unknown')})" for name in failed
+    )
+    if command_state != "ok":
+        r.error("Discord command channel is inaccessible to the bot "
+                f"({command_state}); commands cannot be received")
+    r.error(f"Discord multichannel routing is degraded: {details}")
+    if health.get("webhook_present"):
+        r.warning("Discord webhook fallback is present, so posts may still appear in one channel; "
+                  "that does not restore bot commands or dedicated-channel routing")
+
+
 def _check_egress_ip(r):
     """Report the public egress IP so you can see — especially on HEADLESS runs — whether
     traffic is leaving via the VPN or the bare ISP connection. Informational only."""
@@ -268,6 +370,7 @@ def run(fix=True, post=True):
     _check_logs(r)
     _check_bot_pid(r, fix)
     _check_discord_bot_process(r)
+    _check_discord_delivery(r)
 
     lines = [f"# FeintTrade Diagnostics — {now_mt_str()}",
              f"Status: {'✅ HEALTHY' if r.healthy() else '❌ ISSUES FOUND'}", ""]
@@ -292,7 +395,7 @@ def run(fix=True, post=True):
         if not desc: desc.append("All systems healthy. ✅")
         try:
             dn.send(f"🩺 Diagnostics — {'HEALTHY' if r.healthy() else 'ISSUES'}",
-                    "\n".join(desc)[:4000], color=color)
+                    "\n".join(desc)[:4000], color=color, msg_type="dev_log")
         except Exception:
             pass
     return 0 if r.healthy() else 1

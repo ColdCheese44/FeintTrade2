@@ -16,8 +16,10 @@ All rejection messages include actual numbers.
 """
 
 import json
+import hashlib
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -34,6 +36,7 @@ from common import (  # noqa: E402
     get_effective_caps,
     is_crypto,
     is_option,
+    load_live_account,
     load_options_config,
     load_risk,
     make_http_session,
@@ -42,6 +45,7 @@ from common import (  # noqa: E402
     option_underlying,
     sector_for,
 )
+import execution_ledger as ledger  # noqa: E402
 
 ALPACA_KEY = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET = os.getenv("APCA_API_SECRET_KEY")
@@ -66,37 +70,218 @@ def get_market_status():
     return response.json()
 
 
-def place_order(symbol, qty, side, limit_price=None):
+_CLOCK_CACHE = {"ts": 0.0, "val": None}
+
+
+def equities_open_now(ttl: int = 60, default=True) -> bool:
     """
-    Place a buy or sell limit order. Returns Alpaca JSON on success or
+    Authoritative 'can equities trade right now?' from the Alpaca clock (cached ~`ttl`s).
+    Unlike common.market_phase() — which is purely time-based and HOLIDAY-BLIND (it labels
+    a market holiday like Juneteenth as REGULAR) — the broker clock knows holidays and the
+    real session bounds. Returns `default` (True, fail-open) if the clock can't be reached,
+    so a transient network blip never silently halts trading.
+    """
+    import time as _t
+    now = _t.time()
+    if _CLOCK_CACHE["val"] is not None and now - _CLOCK_CACHE["ts"] < ttl:
+        return _CLOCK_CACHE["val"]
+    try:
+        is_open = bool(get_market_status().get("is_open"))
+        _CLOCK_CACHE.update(ts=now, val=is_open)
+        return is_open
+    except Exception:
+        prev = _CLOCK_CACHE["val"]
+        return prev if prev is not None else default
+
+
+def make_client_order_id(symbol, qty, side, limit_price, intent_key=None, now=None):
+    """Build an Alpaca-safe idempotency key for one 15-minute decision window."""
+    current = now or datetime.now(timezone.utc)
+    bucket_minute = (current.minute // 15) * 15
+    bucket = current.replace(minute=bucket_minute, second=0, microsecond=0)
+    raw = "|".join([
+        bucket.isoformat(),
+        normalize_symbol(symbol),
+        str(side).lower(),
+        f"{float(qty):.8f}",
+        f"{float(limit_price):.5f}",
+        str(intent_key or ""),
+    ])
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return f"ft-{bucket:%Y%m%dT%H%M}-{digest}"
+
+
+def get_order_by_client_id(client_order_id):
+    """Fetch one Alpaca order using the caller-assigned idempotency key."""
+    response = _HTTP.get(
+        f"{BASE_URL}/v2/orders:by_client_order_id",
+        headers=HEADERS,
+        params={"client_order_id": client_order_id},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    order = response.json()
+    order.setdefault("client_order_id", client_order_id)
+    ledger.record_snapshot(order, event_type="order.reconciled", client_order_id=client_order_id)
+    return order
+
+
+def unresolved_order_for(symbol, side):
+    """Return a conflicting unresolved local order, if one exists."""
+    normalized = normalize_symbol(symbol)
+    # A pending sell must not block an emergency buy-to-cover. A pending buy blocks
+    # every additional buy, and any unresolved order blocks a new exposure-increasing buy.
+    query_side = str(side).lower() if str(side).lower() == "sell" else None
+    return ledger.has_unresolved_order(normalized, side=query_side)
+
+
+def place_order(
+    symbol,
+    qty,
+    side,
+    limit_price=None,
+    client_order_id=None,
+    intent_key=None,
+    intent_context=None,
+):
+    """
+    Place a buy or sell LIMIT order. Returns Alpaca JSON on success or
     {"error": "..."} on failure without raising.
+
+    LIMIT-ONLY is a hard SOP rule. A missing/invalid limit price is rejected here at the
+    lowest layer rather than silently downgraded to a market order — so no caller (incl. the
+    `trade.py order` CLI) can ever submit a market order and breach the rule.
     """
+    try:
+        lp = float(limit_price) if limit_price is not None else 0.0
+    except (TypeError, ValueError):
+        lp = 0.0
+    if lp <= 0:
+        return {"error": "Limit price required — market orders are not permitted (limit-only SOP).",
+                "submitted": {"symbol": symbol, "qty": str(qty), "side": side}}
     crypto = is_crypto(symbol)
     order_symbol = normalize_symbol(symbol)
     order_data = {
         "symbol": order_symbol,
         "qty": str(qty),
         "side": side,
-        "type": "limit" if limit_price else "market",
+        "type": "limit",
         "time_in_force": "gtc" if crypto else "day",
     }
     if limit_price:
         decimals = 5 if crypto else 2
         order_data["limit_price"] = str(round(float(limit_price), decimals))
 
+    client_order_id = client_order_id or make_client_order_id(
+        order_symbol, qty, side, limit_price, intent_key=intent_key
+    )
+    order_data["client_order_id"] = client_order_id
+
+    existing = ledger.get_order(client_order_id)
+    if existing:
+        if not ledger.is_terminal(existing.get("status")):
+            try:
+                recovered = get_order_by_client_id(client_order_id)
+                if recovered:
+                    recovered["_reconciled"] = True
+                    return recovered
+            except Exception:
+                pass
+            return {
+                "error": "Order intent is already unresolved; submission was not repeated.",
+                "ambiguous": True,
+                "client_order_id": client_order_id,
+                "submitted": order_data,
+            }
+        return {
+            "error": f"Order intent already finalized as {existing.get('status')}; submission was not repeated.",
+            "duplicate": True,
+            "client_order_id": client_order_id,
+            "submitted": order_data,
+        }
+
+    conflict, pending = unresolved_order_for(order_symbol, side)
+    if conflict:
+        return {
+            "error": (
+                f"Unresolved {pending.get('side')} order already exists for {order_symbol} "
+                f"({pending.get('status')}, client_order_id={pending.get('client_order_id')})."
+            ),
+            "ambiguous": True,
+            "client_order_id": pending.get("client_order_id"),
+            "submitted": order_data,
+        }
+
+    ledger.record_intent(
+        client_order_id,
+        symbol=order_symbol,
+        side=str(side).lower(),
+        qty=float(qty),
+        limit_price=float(order_data["limit_price"]),
+        payload=order_data,
+        context=intent_context,
+    )
+
     headers = {**HEADERS, "Content-Type": "application/json"}
     url = f"{BASE_URL}/v2/orders"
     try:
         response = _HTTP.post(url, headers=headers, json=order_data, timeout=15)
         if response.status_code >= 400:
+            if response.status_code >= 500 or response.status_code == 422:
+                try:
+                    recovered = get_order_by_client_id(client_order_id)
+                    if recovered:
+                        recovered["_reconciled"] = True
+                        return recovered
+                except Exception:
+                    pass
             try:
                 msg = response.json().get("message", response.text)
             except Exception:
                 msg = response.text
-            return {"error": f"Alpaca {response.status_code}: {msg}", "submitted": order_data}
-        return response.json()
+            ambiguous = response.status_code >= 500
+            error = f"Alpaca {response.status_code}: {msg}"
+            ledger.record_error(
+                client_order_id,
+                error=error,
+                ambiguous=ambiguous,
+                symbol=order_symbol,
+                side=side,
+                payload={"status_code": response.status_code},
+            )
+            return {
+                "error": error,
+                "ambiguous": ambiguous,
+                "client_order_id": client_order_id,
+                "submitted": order_data,
+            }
+        result = response.json()
+        result.setdefault("client_order_id", client_order_id)
+        ledger.record_snapshot(result, event_type="order.accepted", client_order_id=client_order_id)
+        return result
     except Exception as exc:
-        return {"error": str(exc), "submitted": order_data}
+        try:
+            recovered = get_order_by_client_id(client_order_id)
+            if recovered:
+                recovered["_reconciled"] = True
+                return recovered
+        except Exception:
+            pass
+        ledger.record_error(
+            client_order_id,
+            error=str(exc),
+            ambiguous=True,
+            symbol=order_symbol,
+            side=side,
+        )
+        return {
+            "error": str(exc),
+            "ambiguous": True,
+            "client_order_id": client_order_id,
+            "submitted": order_data,
+        }
 
 
 def cancel_all_orders():
@@ -115,6 +300,52 @@ def get_orders(status="all"):
     return response.json()
 
 
+def reconcile_orders(include_broker_orders=True):
+    """Refresh local order projections from Alpaca without mutating broker state."""
+    seen = set()
+    refreshed = 0
+    errors = []
+
+    if include_broker_orders:
+        try:
+            response = _HTTP.get(
+                f"{BASE_URL}/v2/orders",
+                headers=HEADERS,
+                params={"status": "all", "limit": 500, "direction": "desc"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            recent_orders = response.json()
+            for order in recent_orders if isinstance(recent_orders, list) else []:
+                client_id = str(order.get("client_order_id") or "")
+                if not client_id.startswith("ft-"):
+                    continue
+                ledger.record_snapshot(order, event_type="order.reconciled")
+                seen.add(client_id)
+                refreshed += 1
+        except Exception as exc:
+            errors.append(f"recent-orders: {exc}")
+
+    for pending in ledger.get_unresolved_orders():
+        client_id = pending.get("client_order_id")
+        if not client_id or client_id in seen:
+            continue
+        try:
+            order = get_order_by_client_id(client_id)
+            if order:
+                refreshed += 1
+        except Exception as exc:
+            errors.append(f"{client_id}: {exc}")
+
+    unresolved = ledger.get_unresolved_orders()
+    return {
+        "refreshed": refreshed,
+        "unresolved": len(unresolved),
+        "orders": unresolved,
+        "errors": errors,
+    }
+
+
 def cancel_stale_orders(max_age_seconds=90):
     """
     Cancel open orders resting unfilled longer than max_age_seconds. Our orders are
@@ -124,11 +355,8 @@ def cancel_stale_orders(max_age_seconds=90):
 
     Returns a list of dicts, one per cancelled order:
         {"symbol", "side", "qty", "limit_price", "desc"}
-    The structured fields let the caller reconcile entry-tracking — a BUY is logged to
-    open_trades.json on ACCEPTANCE, so a cancelled-unfilled buy leaves an orphan entry
-    that must be dropped (see orchestrator._cancel_stale_orders). `desc` is the
-    human-readable summary for logging. (trade.py deliberately does NOT import learning;
-    the orchestrator owns the reconciliation to keep the module boundary clean.)
+    Structured fields let the caller reconcile legacy entry tracking and distinguish
+    a confirmed cancellation from a cancellation request that is still pending.
     """
     from datetime import datetime, timezone
     try:
@@ -146,11 +374,37 @@ def cancel_stale_orders(max_age_seconds=90):
                 continue
             r = _HTTP.delete(f"{BASE_URL}/v2/orders/{o['id']}", headers=HEADERS, timeout=REQUEST_TIMEOUT)
             if r.status_code in (200, 204):
+                client_id = o.get("client_order_id")
+                if client_id:
+                    ledger.append_event(
+                        "order.cancel_requested",
+                        client_order_id=client_id,
+                        broker_order_id=o.get("id"),
+                        symbol=normalize_symbol(o.get("symbol", ""), o.get("asset_class")),
+                        side=str(o.get("side") or "").lower(),
+                        status=o.get("status") or "unknown",
+                        payload=o,
+                    )
+                final = o
+                try:
+                    check = _HTTP.get(
+                        f"{BASE_URL}/v2/orders/{o['id']}",
+                        headers=HEADERS,
+                        timeout=REQUEST_TIMEOUT,
+                    )
+                    if check.status_code == 200:
+                        final = check.json()
+                        ledger.record_snapshot(final, event_type="order.cancel_result")
+                except Exception:
+                    pass
                 cancelled.append({
                     "symbol":      o.get("symbol"),
                     "side":        str(o.get("side") or "").lower(),
                     "qty":         o.get("qty"),
                     "limit_price": o.get("limit_price"),
+                    "client_order_id": client_id,
+                    "status":      ledger.normalize_status(final.get("status")),
+                    "filled_qty":  float(final.get("filled_qty") or 0),
                     "desc":        f"{o.get('side')} {o.get('qty')} {o.get('symbol')} @ ${o.get('limit_price')}",
                 })
         except Exception:
@@ -166,9 +420,9 @@ def get_order_fill(order_id, timeout_seconds=4.0, poll_interval=0.75):
     Marketable limit orders fill within a second or two, so a short poll captures the
     real fill — letting the caller record the entry at the ACTUAL filled qty/avg price
     instead of the requested values (fixes partial-fill qty drift). If nothing fills in
-    the window, returns (0.0, None, last_status); the caller falls back to the requested
-    values and a still-resting order is later swept by cancel_stale_orders(). Network
-    errors are swallowed (best-effort confirmation, never blocks order flow).
+    the window, returns (0.0, None, last_status); the order remains unresolved in the
+    execution ledger until reconciliation or cancellation. Network errors are swallowed
+    here because the durable order state remains fail-closed.
     """
     import time
     deadline = time.monotonic() + max(0.0, float(timeout_seconds))
@@ -181,6 +435,7 @@ def get_order_fill(order_id, timeout_seconds=4.0, poll_interval=0.75):
             r = _HTTP.get(f"{BASE_URL}/v2/orders/{order_id}", headers=HEADERS, timeout=REQUEST_TIMEOUT)
             if r.status_code == 200:
                 o = r.json()
+                ledger.record_snapshot(o, event_type="order.fill_poll")
                 last_status = o.get("status", last_status)
                 filled_qty = float(o.get("filled_qty") or 0)
                 if o.get("filled_avg_price"):
@@ -231,6 +486,35 @@ def _pending_crypto_notional() -> float:
         return total
     except Exception:
         return 0.0
+
+
+def deterministic_position_qty_cap(price, equity, alloc_pct, regime_mult=1.0,
+                                   conviction_factor=1.0, existing_long_mv=0.0,
+                                   safety=0.99):
+    """
+    Maximum BUY quantity allowed under the documented POSITION SIZING formula — the
+    deterministic guardrail behind orchestrator._execute_orders. Pure arithmetic (no
+    I/O), so it is trivially unit-testable.
+
+        notional_cap = equity × alloc_pct/100 × regime_mult × conviction_factor
+        qty_cap      = max(0, notional_cap − existing_long_mv) / price × safety
+
+    `existing_long_mv` is the symbol's current LONG market value so a scale-in only
+    fills the remaining headroom (never stacks a second full-size tranche). `safety`
+    (<1) leaves a sliver so a re-priced marketable limit can't tip the fill back over
+    the cap. Returns (qty_cap, headroom_notional). A non-positive price/equity (or a
+    zero-conviction factor) returns (0.0, 0.0).
+    """
+    try:
+        price = float(price)
+        equity = float(equity)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    if price <= 0 or equity <= 0:
+        return 0.0, 0.0
+    notional_cap = equity * (float(alloc_pct) / 100.0) * float(regime_mult) * float(conviction_factor)
+    headroom = max(0.0, notional_cap - max(0.0, float(existing_long_mv)))
+    return (headroom / price) * float(safety), headroom
 
 
 def validate_order(symbol, qty, side, current_price, account, positions,
@@ -296,6 +580,20 @@ def validate_order(symbol, qty, side, current_price, account, positions,
                 f"BUY BLOCKED - SOFT STOP active (day P&L hit -{soft_limit:.0f}% limit). "
                 f"No new buy/open orders permitted today."
             )
+
+    # ── Minimum order size (live-sim) ─────────────────────────────────────────────
+    # Skip dust orders below live_account.min_order_usd. This binds on BUYS only
+    # (sells de-risk and are never blocked). `order_value` is the FINAL notional —
+    # the orchestrator scales qty by regime × live_scale BEFORE calling, so a live-sim
+    # order scaled below the floor is rejected here rather than placed as dust. Policy
+    # is SKIP, never round up (rounding up would breach the very sizing it enforces).
+    # Missing/zero config -> no floor (load_live_account defaults min_order_usd to 1.0).
+    min_order_usd = float((load_live_account() or {}).get("min_order_usd", 0) or 0)
+    if min_order_usd > 0 and order_value < min_order_usd - 1e-9:
+        return False, (
+            f"BUY BLOCKED - order notional ${order_value:,.2f} is below the "
+            f"live_account.min_order_usd ${min_order_usd:,.2f} minimum ({sym_norm}); skipped."
+        )
 
     # ── Options (long calls/puts) — premium-based caps, not the equity/crypto rules ──
     if is_option(symbol):

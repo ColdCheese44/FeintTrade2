@@ -116,3 +116,71 @@ def freshness_label(age_seconds, stale_after=120):
     if age_seconds <= stale_after * 5:
         return ("🟡 stale", "#f59e0b")
     return ("🔴 old", "#ff4d6d")
+
+
+def _fmt_age(seconds):
+    """Compact age string: '12s', '4m', '2h 5m', '1d 3h'."""
+    if seconds is None:
+        return "—"
+    s = int(max(0, seconds))
+    if s < 60:
+        return f"{s}s"
+    m, _s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h}h {m}m"
+    d, h = divmod(h, 24)
+    return f"{d}d {h}h"
+
+
+def agent_health(heartbeat: dict, last_activity_ts=None, now=None,
+                 fresh_secs: int = 2400, warn_secs: int = 7200) -> dict:
+    """
+    Liveness of the autonomous agent for the dashboard header. Pure/testable.
+
+    `heartbeat` is the parsed heartbeat.json ({timestamp, status, notes}); it gives the
+    human-readable last-routine note + an explicit error status. `last_activity_ts` is an
+    epoch-seconds fallback pulse (e.g. the mtime of an agent-written data file) so the
+    indicator stays accurate even when heartbeat.json itself is between its routine writes.
+    Freshness is driven by whichever signal is most recent.
+
+    The crypto cycle runs every 30 min 24/7, so `fresh_secs` defaults to 40 min (one cycle
+    + margin) and `warn_secs` to 2 h. Returns {dot, label, color, age, age_secs, notes,
+    status}.
+    """
+    import datetime as _dt
+    now = now if now is not None else _dt.datetime.now(_dt.timezone.utc).timestamp()
+    hb = heartbeat or {}
+    notes = hb.get("notes") or "—"
+    status = str(hb.get("status") or "").lower()
+
+    candidates = []
+    ts = hb.get("timestamp")
+    if ts:
+        try:
+            candidates.append(_dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp())
+        except Exception:
+            pass
+    if last_activity_ts:
+        try:
+            candidates.append(float(last_activity_ts))
+        except (TypeError, ValueError):
+            pass
+
+    if not candidates:
+        return {"dot": "🔴", "label": "no signal", "color": "#ff4d6d",
+                "age": "—", "age_secs": None, "notes": notes, "status": status or "?"}
+
+    age = max(0.0, now - max(candidates))
+    if status and status not in ("ok", "healthy", "good"):
+        dot, label, color = "🔴", f"error ({status})", "#ff4d6d"
+    elif age <= fresh_secs:
+        dot, label, color = "🟢", "live", "#00d4aa"
+    elif age <= warn_secs:
+        dot, label, color = "🟡", "quiet", "#f59e0b"
+    else:
+        dot, label, color = "🔴", "stalled", "#ff4d6d"
+    return {"dot": dot, "label": label, "color": color,
+            "age": _fmt_age(age), "age_secs": int(age), "notes": notes, "status": status or "ok"}

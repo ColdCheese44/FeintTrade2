@@ -11,20 +11,19 @@ import threading
 import time
 from pathlib import Path
 from dotenv import load_dotenv
+from scripts.browser import open_urls_in_feint_browser
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env", override=True)
 
 SERVER_ID   = os.getenv("DISCORD_SERVER_ID", "")
-CHANNEL_ID  = os.getenv("DISCORD_MINDHUB_CHANNEL_ID", "")
+# Open the operator's primary channel — ft-command-center (where the bot listens and the
+# per-routine !status pulse posts). Fall back to legacy variable names for older configs.
+CHANNEL_ID  = (os.getenv("DISCORD_CH_COMMAND_CENTER")
+               or os.getenv("DISCORD_CH_COMMAND_POST")
+               or os.getenv("DISCORD_MINDHUB_CHANNEL_ID", ""))
 DISCORD_URL = f"https://discord.com/channels/{SERVER_ID}/{CHANNEL_ID}"
 ALPACA_URL  = "https://app.alpaca.markets/paper/dashboard/overview"
-
-CHROME_PATHS = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-]
 
 PROCS = []
 
@@ -121,20 +120,8 @@ class AppAPI:
         self._discord_window = None
 
     def open_discord(self):
-        """Open Discord AND Alpaca as two tabs in the same Chrome window (user already signed in)."""
-        chrome = next((p for p in CHROME_PATHS if os.path.exists(p)), None)
-        if chrome:
-            try:
-                # First URL opens a new window; second opens as a tab in that same window.
-                subprocess.Popen([chrome, "--new-window", DISCORD_URL])
-                subprocess.Popen([chrome, ALPACA_URL])
-                return
-            except Exception:
-                pass
-        # Fallback: default browser, two tabs
-        import webbrowser
-        webbrowser.open(DISCORD_URL)
-        webbrowser.open_new_tab(ALPACA_URL)
+        """Open Discord and Alpaca as tabs in Feint's preferred Brave window."""
+        open_urls_in_feint_browser([DISCORD_URL, ALPACA_URL])
 
     def minimize_to_tray(self):
         pass  # handled by OS minimize button
@@ -212,7 +199,7 @@ iframe {
   <span class="logo">📈 FEINTTRADE</span>
   <div class="tabs">
     <button class="tab active" id="tab-dash" onclick="activateTab('dash')">Dashboard</button>
-    <button class="tab" id="tab-discord" onclick="openDiscord()">Discord/Alpaca</button>
+    <button class="tab" id="tab-discord" onclick="openDiscord()">Command Center/Alpaca</button>
   </div>
   <div class="status-dot" title="Agent running"></div>
 </div>
@@ -277,7 +264,7 @@ if __name__ == "__main__":
             main_win.maximize()
         except Exception:
             pass
-        # Auto-launch Discord + Alpaca as two tabs in one Chrome window on startup.
+        # Auto-launch Discord + Alpaca as two tabs in one Brave window on startup.
         try:
             api.open_discord()
         except Exception:
