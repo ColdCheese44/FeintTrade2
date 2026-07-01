@@ -246,10 +246,12 @@
   },
 
   "dynamic_watchlist": {
-    "note": "Auto-updating watchlist (scripts/watchlist_manager.py). Recurring high-quality discovery candidates are auto-PROMOTED into a persisted dynamic list (data/dynamic_watchlist.json) and injected into the decision prompts; stale ones are demoted. Never rewrites this file. Promotions/demotions post to #ft-watchlist. Penny-caution names are never promoted.",
+    "note": "Auto-updating watchlist (scripts/watchlist_manager.py). The marketwide scanner runs EVERY routine (via _load_context) and this tracker updates continuously: a name is PROMOTED once it recurs on >= promote_min_appearances distinct DAYS AND either showed real momentum (best discovery score >= promote_min_score; a gainer scores 3) OR has been persistently in-play (>= persistence_appearances distinct days). Promoted names get the full indicator fetch (bounded by discovery.max_analyzed_dynamic) and are risk-capped at discovery.default_max_alloc_pct. Stale names demote after demote_after_days; active capped at max_active. Appearances count distinct DAYS so per-cycle ticks never over-promote. Promotions/demotions post to #ft-watchlist. Penny-caution names are never promoted.",
+    "history_note": "promote_min_score was 4, which no equity candidate ever reaches (best score maxes at ~3), so the active set sat permanently empty. Lowered to 3 and added the persistence_appearances path 2026-06-26.",
     "enabled": true,
     "promote_min_appearances": 3,
-    "promote_min_score": 4,
+    "promote_min_score": 3,
+    "persistence_appearances": 5,
     "demote_after_days": 4,
     "max_active": 12,
     "tracker_window_days": 14

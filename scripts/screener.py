@@ -333,10 +333,12 @@ def discover():
     }
 
 
-def get_discovery_brief():
-    """Formatted candidate list for injection into Claude prompts."""
+def get_discovery_brief(discovery=None):
+    """Formatted candidate list for injection into Claude prompts. Accepts a pre-computed
+    discovery dict so the caller can reuse a single scan for both the brief and the
+    watchlist tracker update."""
     try:
-        d = discover()
+        d = discovery if discovery is not None else discover()
     except Exception as e:
         return f"=== MARKETWIDE DISCOVERY: unavailable ({e}) ==="
     if not d.get("enabled"):

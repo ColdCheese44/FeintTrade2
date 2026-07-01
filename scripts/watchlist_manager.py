@@ -24,8 +24,9 @@ STATE = ROOT / "data" / "dynamic_watchlist.json"
 
 DEFAULTS = {
     "enabled": True,
-    "promote_min_appearances": 3,   # times seen in discovery before promotion
-    "promote_min_score": 4,         # best discovery score required to promote
+    "promote_min_appearances": 3,   # distinct DAYS seen in discovery before promotion
+    "promote_min_score": 3,         # best discovery score to promote on momentum (gainer=3)
+    "persistence_appearances": 5,   # OR: seen this many distinct days (persistently in-play)
     "demote_after_days": 4,         # drop if not seen this long
     "max_active": 12,               # cap on dynamic symbols
     "tracker_window_days": 14,      # prune tracker entries older than this
@@ -77,24 +78,34 @@ def update(discovery: dict | None = None, today: str | None = None) -> dict:
     active = set(state.get("active", []))
 
     # Ingest current candidates (skip penny-caution names — too manipulation-prone to promote).
+    # `appearances` counts DISTINCT DAYS, not calls — so this is safe to run every cycle
+    # (the tracker/promotions update continuously) without inflating the count.
     for c in discovery.get("candidates", []):
         sym = c.get("symbol")
         if not sym or c.get("penny_caution"):
             continue
         t = tracker.setdefault(sym, {"appearances": 0, "best_score": 0,
                                      "type": c.get("type", "equity"), "first_seen": today})
-        t["appearances"] = t.get("appearances", 0) + 1
+        if t.get("last_seen") != today:                 # first sighting today → new day
+            t["appearances"] = t.get("appearances", 0) + 1
         t["best_score"] = max(t.get("best_score", 0), c.get("score", 0))
         t["last_seen"] = today
         t["last_reason"] = c.get("reason", "")
         t["type"] = c.get("type", t.get("type", "equity"))
 
-    # Promote
+    # Promote: a name that RECURS (>= promote_min_appearances distinct days) and either
+    # showed real momentum at least once (best_score >= promote_min_score) OR has been
+    # persistently in-play (>= persistence_appearances distinct days). The old rule required
+    # best_score >= 4, which no equity candidate ever reaches (max ~3), so nothing ever
+    # promoted and the auto-watchlist sat permanently empty.
+    persistence = cfg.get("persistence_appearances", 5)
     promoted = []
     for sym, t in tracker.items():
+        appears = t.get("appearances", 0)
         if (sym not in active
-                and t.get("appearances", 0) >= cfg["promote_min_appearances"]
-                and t.get("best_score", 0) >= cfg["promote_min_score"]):
+                and appears >= cfg["promote_min_appearances"]
+                and (t.get("best_score", 0) >= cfg["promote_min_score"]
+                     or appears >= persistence)):
             active.add(sym)
             t["promoted_at"] = today
             promoted.append(sym)
@@ -146,10 +157,13 @@ def brief() -> str:
     return "\n".join(lines)
 
 
-def run_and_post() -> dict:
-    """Run an update and post any promotions/demotions to #ft-watchlist. For the
-    orchestrator/CLI. Returns the change set."""
-    changes = update()
+def tick(discovery: dict | None = None) -> dict:
+    """Update the tracker and post any promotions/demotions to #ft-watchlist. Pass the
+    discovery dict already computed for the prompt brief to avoid a second market scan —
+    this is what lets every routine keep the watchlist current at zero extra API cost.
+    Promotions are per-day and idempotent, so calling this every routine posts a given
+    change exactly once. Returns the change set."""
+    changes = update(discovery=discovery)
     if changes["promoted"] or changes["demoted"]:
         try:
             import discord_notify as dn
@@ -165,6 +179,11 @@ def run_and_post() -> dict:
         except Exception:
             pass
     return changes
+
+
+def run_and_post() -> dict:
+    """Back-compat wrapper: fetch discovery + tick. Used by the CLI and research routine."""
+    return tick()
 
 
 if __name__ == "__main__":

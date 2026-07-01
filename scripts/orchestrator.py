@@ -945,12 +945,22 @@ def _load_context() -> dict:
     except Exception:
         ctx["live_brief"] = ""
 
+    # Single marketwide scan per context load, reused for BOTH the prompt brief and the
+    # dynamic-watchlist tracker — so the watchlist keeps updating (promote/demote) on EVERY
+    # routine, continuously and automatically, at no extra API cost. Appearances are counted
+    # per distinct day inside the tracker, so running this every cycle can't over-promote.
     try:
-        ctx["discovery_brief"] = get_discovery_brief()
+        from screener import discover as _discover
+        _disc = _discover()
+    except Exception:
+        _disc = None
+    try:
+        ctx["discovery_brief"] = get_discovery_brief(_disc)
     except Exception:
         ctx["discovery_brief"] = ""
     try:
         import watchlist_manager
+        watchlist_manager.tick(_disc)                    # continuous auto-update of the watchlist
         _wb = watchlist_manager.brief()
         if _wb:
             ctx["discovery_brief"] = (ctx.get("discovery_brief", "") + "\n\n" + _wb).strip()

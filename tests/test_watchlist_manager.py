@@ -19,8 +19,9 @@ import watchlist_manager as wm
 @pytest.fixture
 def wlm(monkeypatch, tmp_path):
     monkeypatch.setattr(wm, "STATE", tmp_path / "dyn.json")
-    cfg = {"enabled": True, "promote_min_appearances": 3, "promote_min_score": 4,
-           "demote_after_days": 4, "max_active": 3, "tracker_window_days": 14}
+    cfg = {"enabled": True, "promote_min_appearances": 3, "promote_min_score": 3,
+           "persistence_appearances": 5, "demote_after_days": 4, "max_active": 3,
+           "tracker_window_days": 14}
     monkeypatch.setattr(wm, "_cfg", lambda: cfg)
     return cfg
 
@@ -38,11 +39,56 @@ def test_promotes_after_min_appearances(wlm):
     assert "AAPL" in ch["promoted"] and "AAPL" in ch["active"]
 
 
-def test_low_score_never_promoted(wlm):
+def test_low_score_below_persistence_not_promoted(wlm):
     ch = {}
     for day in ("2026-06-10", "2026-06-11", "2026-06-12", "2026-06-13"):
-        ch = wm.update(_disc(("LOW", 2)), today=day)   # score 2 < min 4
+        ch = wm.update(_disc(("LOW", 2)), today=day)   # score 2 < min 3, only 4 days < 5
     assert "LOW" not in ch["active"]
+
+
+def test_promotes_on_momentum_score(wlm):
+    """A name that showed real momentum (discovery score >= promote_min_score=3, i.e. a
+    gainer) and recurred 3 days promotes — this is the path the old min_score=4 broke."""
+    ch = {}
+    for day in ("2026-06-10", "2026-06-11", "2026-06-12"):
+        ch = wm.update(_disc(("GAIN", 3)), today=day)
+    assert "GAIN" in ch["promoted"] and "GAIN" in ch["active"]
+
+
+def test_promotes_via_persistence_even_at_low_score(wlm):
+    """A persistently in-play liquid name (only ever score 2) promotes once it recurs on
+    persistence_appearances (5) distinct days — so the auto-watchlist keeps growing even
+    when nothing is a strong mover."""
+    ch = {}
+    days = ("2026-06-10", "2026-06-11", "2026-06-12", "2026-06-13")
+    for day in days:
+        ch = wm.update(_disc(("LIQ", 2)), today=day)
+        assert "LIQ" not in ch["active"]               # 4 days, not yet
+    ch = wm.update(_disc(("LIQ", 2)), today="2026-06-14")   # 5th distinct day
+    assert "LIQ" in ch["promoted"] and "LIQ" in ch["active"]
+
+
+def test_appearances_count_distinct_days_not_calls(wlm):
+    """Appearances must count DISTINCT DAYS, not calls — so running the tracker every
+    cycle (many calls/day) can never over-promote a one-day name."""
+    for _ in range(4):
+        wm.update(_disc(("META", 3)), today="2026-06-10")   # 4 calls, same day
+    assert wm._load()["tracker"]["META"]["appearances"] == 1
+    assert "META" not in wm.active_symbols()                # 1 distinct day, not 3
+    wm.update(_disc(("META", 3)), today="2026-06-11")
+    assert wm._load()["tracker"]["META"]["appearances"] == 2
+
+
+def test_update_with_passed_discovery_never_scans(wlm, monkeypatch):
+    """tick/update reuse a passed discovery dict and must NOT call screener.discover()."""
+    import screener
+    def _boom():
+        raise AssertionError("discover() must not be called when a dict is passed")
+    monkeypatch.setattr(screener, "discover", _boom)
+    ch = {}
+    for day in ("2026-06-10", "2026-06-11", "2026-06-12"):
+        ch = wm.update(_disc(("REUSE", 3)), today=day)
+    assert "REUSE" in ch["active"]
 
 
 def test_penny_caution_never_promoted(wlm):
